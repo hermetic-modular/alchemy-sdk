@@ -1,0 +1,125 @@
+/**
+ * @file alchemy/host_link/descriptor.h
+ * @brief DescriptorBuilder — renders the module's self-description JSON
+ *        (see docs/hostlink-protocol.md §5) with drift guards.
+ *
+ * The builder derives byte offsets from the *same* introspection the
+ * surfaces serialize with (Pager page/pot grid, Settings slot kinds), and
+ * verifies at every stage that its arithmetic matches SerializedSize()
+ * and the Presets Manage() order.  Any mismatch latches an error and
+ * Finish() returns 0 — the firmware then simply reports "no descriptor"
+ * instead of shipping a wrong one.
+ *
+ * Usage (app code, once at boot, after controls are declared and defaults
+ * seeded, before BootLoad):
+ *
+ *   alchemy::hostlink::DescriptorBuilder db(buf, sizeof buf, presets);
+ *   db.Begin({.id="echoa", .name="Echoa", .fw=..., .git=..., .sdk=..., .board="v1"});
+ *   db.BeginPager("perf", pager);
+ *   db.PagerField(0, 0, "d1.time", "Time 1", "{\"kind\":\"expTime\",...}");
+ *   ...
+ *   db.PagerAltMap("global.layout", kAltIds);   // optional
+ *   db.EndPager();
+ *   db.Opaque("motion", locks, "Motion recording");
+ *   db.BeginSettings("settings", settings);
+ *   db.SettingsField(0, 0, "routing.mode", "Delay Mode", "{\"kind\":\"enum\",...}");
+ *   ...
+ *   db.EndSettings();
+ *   const uint32_t len = db.Finish();           // 0 on any drift/overflow
+ */
+
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+#include "alchemy/host_link/json_writer.h"
+
+namespace alchemy {
+
+class Presets;
+class Pager;
+class Settings;
+class Serializable;
+
+namespace hostlink {
+
+class DescriptorBuilder
+{
+  public:
+    struct ModuleInfo
+    {
+        const char* id;      /* stable machine id, e.g. "echoa"   */
+        const char* name;    /* display name                      */
+        const char* fw;      /* firmware semver                   */
+        const char* git;     /* short git hash                    */
+        const char* sdk;     /* SDK version                       */
+        const char* board;   /* "v1" / "v2"                       */
+    };
+
+    DescriptorBuilder(char* buf, size_t cap, const Presets& presets);
+
+    bool Begin(const ModuleInfo& m);
+
+    /* ── Pager component ────────────────────────────────────────── */
+    bool BeginPager(const char* id, const Pager& pager);
+    /** One field per (page, pot); disp_json may be nullptr for a plain
+     *  percent readout.  def is captured from the pager's stored value. */
+    bool PagerField(uint8_t page, uint8_t pot,
+                    const char* field_id, const char* name,
+                    const char* disp_json);
+    /** Optional alternate position→field mapping (row-major page-major
+     *  array of pages×pots field ids), active when the enum field named
+     *  @p layout_from selects zone 1.  @p count must equal
+     *  NumPages()*NumPots(); a mismatch latches an error and Finish()
+     *  returns 0 rather than reading @p field_ids out of bounds. */
+    bool PagerAltMap(const char* layout_from, const char* const* field_ids,
+                     size_t count);
+    bool EndPager();
+
+    /* ── Opaque component (round-trips byte-exact) ──────────────── */
+    bool Opaque(const char* id, const Serializable& s, const char* name);
+
+    /* ── Preset-name component (alchemy::PresetName) ────────────────
+     * Emits kind "name": a fixed NUL-padded string buffer the host may
+     * read and rewrite in place.  Size comes from the component. */
+    bool Name(const char* id, const Serializable& s);
+
+    /* ── Settings component ─────────────────────────────────────── */
+    bool BeginSettings(const char* id, const Settings& settings);
+    bool SettingsField(uint8_t page, uint8_t pot,
+                       const char* field_id, const char* name,
+                       const char* disp_json);
+    bool EndSettings();
+
+    /** Close all structures and validate totals.  Returns descriptor
+     *  length in bytes, or 0 if anything drifted or overflowed. */
+    uint32_t Finish();
+
+  private:
+    static constexpr uint8_t kMaxSettingsPages = 4u;
+    static constexpr uint8_t kMaxPots          = 8u;
+
+    bool CheckManaged(const Serializable& s);
+    void OpenComponent(const char* id, const char* kind,
+                       const Serializable& s);
+
+    JsonWriter     w_;
+    const Presets& presets_;
+
+    bool     error_       = false;
+    uint8_t  comp_index_  = 0u;
+    uint32_t cum_off_     = 0u;
+    uint32_t comp_size_   = 0u;
+
+    /* Pager context. */
+    const Pager* pager_       = nullptr;
+    bool         fields_open_ = false;
+
+    /* Settings context: serialized offset per (page, pot); -1 when the
+     * slot persists nothing. */
+    const Settings* settings_ = nullptr;
+    int16_t         offsets_[kMaxSettingsPages][kMaxPots];
+};
+
+} // namespace hostlink
+} // namespace alchemy

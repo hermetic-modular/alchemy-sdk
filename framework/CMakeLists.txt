@@ -104,3 +104,24 @@ if(ALCHEMY_BOARD STREQUAL "v2")
 endif()
 
 endif()
+
+# ── alchemy::host_link (firmware — cross-compile only) ────────────────────
+# Links alchemy::surface, so it exists only where surface does; host
+# builds are board-free and exercise the protocol sources directly.
+
+if(CMAKE_CROSSCOMPILING)
+
+add_library(alchemy_host_link STATIC
+    src/host_link/host_link.cpp
+    src/host_link/descriptor.cpp
+    src/host_link/cdc_transport.cpp
+)
+add_library(alchemy::host_link ALIAS alchemy_host_link)
+
+target_include_directories(alchemy_host_link PUBLIC
+    "${FRAMEWORK_INCLUDE}"
+    "${HW_INCLUDE}"
+)
+target_link_libraries(alchemy_host_link PUBLIC alchemy::surface)
+
+endif()
