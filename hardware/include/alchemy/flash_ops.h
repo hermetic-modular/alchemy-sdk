@@ -16,20 +16,23 @@
 
 namespace alchemy {
 
+/* Addresses are uintptr_t — identical to uint32_t on the Cortex-M targets,
+ * so this is a pure widening for host builds, where unit tests drive a
+ * RAM-backed store whose "flash addresses" are 64-bit heap pointers. */
 struct FlashOps
 {
     /** Erase flash in the range [start, end). */
-    bool (*erase)(void* ctx, uint32_t start, uint32_t end);
+    bool (*erase)(void* ctx, uintptr_t start, uintptr_t end);
 
     /** Write bytes from buf to addr. */
-    bool (*write)(void* ctx, uint32_t addr, const uint8_t* buf, uint32_t len);
+    bool (*write)(void* ctx, uintptr_t addr, const uint8_t* buf, uint32_t len);
 
     /**
      * Invalidate D-cache for [addr, addr+len).
      * Must be called before reading from memory-mapped flash after an
      * erase or write.  May be a no-op on targets without data cache.
      */
-    void (*invalidate)(void* ctx, uint32_t addr, uint32_t len);
+    void (*invalidate)(void* ctx, uintptr_t addr, uint32_t len);
 
     void* ctx;
 };

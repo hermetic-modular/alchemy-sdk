@@ -47,6 +47,8 @@
 
 namespace alchemy {
 
+using PresetStoreYieldFn = void (*)(void* ctx);
+
 /* ── PresetStore ───────────────────────────────────────────────────── */
 
 template <typename Payload, uint8_t kNumSlots = 16u>
@@ -63,7 +65,7 @@ class PresetStore
      * @param sectors_per_side Number of sectors allocated per ping-pong side.
      */
     void Init(const FlashOps& ops,
-              uint32_t flash_base,
+              uintptr_t flash_base,
               uint32_t sector_size,
               uint8_t  sectors_per_side)
     {
@@ -80,7 +82,7 @@ class PresetStore
                 sectors_[slot][side].valid = false;
                 sectors_[slot][side].seq   = 0u;
 
-                const uint32_t addr = SideAddr(slot, side);
+                const uintptr_t addr = SideAddr(slot, side);
                 ops_.invalidate(ops_.ctx, addr,
                                 static_cast<uint32_t>(sizeof(RecordHeader)
                                                       + sizeof(Payload)));
@@ -88,14 +90,14 @@ class PresetStore
                 const RecordHeader* hdr =
                     reinterpret_cast<const RecordHeader*>(addr);
 
-                if (hdr->magic       != kMagic)           continue;
-                if (hdr->version     != kVersion)         continue;
-                if (hdr->payload_len != sizeof(Payload))  continue;
+                if (hdr->magic   != kMagic)              continue;
+                if (hdr->version != kVersion)            continue;
+                if (hdr->payload_len > sizeof(Payload))  continue;
 
                 const uint8_t* payload =
                     reinterpret_cast<const uint8_t*>(
                         addr + sizeof(RecordHeader));
-                if (Crc32(payload, sizeof(Payload)) != hdr->crc) continue;
+                if (Crc32(payload, hdr->payload_len) != hdr->crc) continue;
 
                 sectors_[slot][side].valid = true;
                 sectors_[slot][side].seq   = hdr->seq;
@@ -103,6 +105,23 @@ class PresetStore
                     next_seq_ = hdr->seq + 1u;
             }
         }
+    }
+
+    /**
+     * Optional cooperative-yield hook, called between flash chunks
+     * (after each sector erase and each sector-sized write) during
+     * Save().  A full side is sectors_per_side × sector-erase — up to
+     * several hundred ms of blocking flash time on typical NOR parts —
+     * so a host with a watchdog or time-critical polling (CV edges,
+     * external clock) should service them here.  The hook runs in the
+     * caller's context; it must not re-enter Save()/Load().
+     *
+     * Survives Init(); pass nullptr to remove.
+     */
+    void SetYield(PresetStoreYieldFn fn, void* ctx)
+    {
+        yield_     = fn;
+        yield_ctx_ = ctx;
     }
 
     /** Returns true if @p slot holds a CRC-verified flash record. */
@@ -133,16 +152,22 @@ class PresetStore
         }
         if (best_side == 0xFFu) return false;
 
-        const uint32_t payload_addr =
-            SideAddr(slot, best_side)
-            + static_cast<uint32_t>(sizeof(RecordHeader));
+        const uintptr_t side_addr = SideAddr(slot, best_side);
+        ops_.invalidate(ops_.ctx, side_addr,
+                        static_cast<uint32_t>(sizeof(RecordHeader)
+                                              + sizeof(Payload)));
 
-        ops_.invalidate(ops_.ctx, payload_addr,
-                        static_cast<uint32_t>(sizeof(Payload)));
+        const RecordHeader* hdr =
+            reinterpret_cast<const RecordHeader*>(side_addr);
+        const uint32_t n = (hdr->payload_len <= sizeof(Payload))
+                               ? hdr->payload_len
+                               : static_cast<uint32_t>(sizeof(Payload));
 
+        std::memset(&out, 0, sizeof(Payload));
         std::memcpy(&out,
-                    reinterpret_cast<const void*>(payload_addr),
-                    sizeof(Payload));
+                    reinterpret_cast<const void*>(
+                        side_addr + sizeof(RecordHeader)),
+                    n);
         return true;
     }
 
@@ -152,7 +177,19 @@ class PresetStore
      */
     bool Save(uint8_t slot, const Payload& data)
     {
+        std::memcpy(StagingPayload(), &data, sizeof(Payload));
+        return CommitStaged(slot, sizeof(Payload));
+    }
+
+    Payload* StagingPayload()
+    {
+        return reinterpret_cast<Payload*>(write_buf_ + sizeof(RecordHeader));
+    }
+
+    bool CommitStaged(uint8_t slot, uint32_t used_bytes = sizeof(Payload))
+    {
         if (slot >= kNumSlots) return false;
+        if (used_bytes > sizeof(Payload)) return false;
 
         /* Choose target side: prefer invalid sides first; then overwrite
          * the one with the lower sequence number. */
@@ -162,33 +199,109 @@ class PresetStore
         else target = (sectors_[slot][0].seq <= sectors_[slot][1].seq)
                       ? 0u : 1u;
 
-        const uint32_t addr    = SideAddr(slot, target);
-        const uint32_t end_addr = addr + SideSize();
+        const uintptr_t addr = SideAddr(slot, target);
 
-        if (!ops_.erase(ops_.ctx, addr, end_addr)) return false;
+        /* Only the sectors covering the record are touched. */
+        const uint32_t record_len =
+            static_cast<uint32_t>(sizeof(RecordHeader)) + used_bytes;
+        uint32_t sectors_needed =
+            (record_len + sector_size_ - 1u) / sector_size_;
+        if (sectors_needed > sectors_per_side_)
+            sectors_needed = sectors_per_side_;
 
-        /* Assemble record into write_buf_. */
+        /* Kick/service the host once immediately before the first blocking
+         * sector erase, so the longest gap between yields is a single
+         * erase (or write), never erase + inter-op overhead.           */
+        Yield();
+
+        for (uint32_t s = 0u; s < sectors_needed; s++)
+        {
+            const uintptr_t s_start = addr + s * sector_size_;
+            if (!ops_.erase(ops_.ctx, s_start, s_start + sector_size_))
+                return false;
+            Yield();
+        }
+
+        /* Assemble the header in place ahead of the (already-staged)
+         * payload; CRC and payload_len cover exactly the used bytes. */
+        const uint8_t* payload = write_buf_ + sizeof(RecordHeader);
         RecordHeader hdr;
         hdr.magic       = kMagic;
         hdr.version     = kVersion;
         hdr.reserved    = 0u;
-        hdr.seq         = next_seq_++;
-        hdr.payload_len = static_cast<uint32_t>(sizeof(Payload));
-        hdr.crc         = Crc32(reinterpret_cast<const uint8_t*>(&data),
-                                sizeof(Payload));
+        hdr.seq         = next_seq_;
+        hdr.payload_len = used_bytes;
+        hdr.crc         = Crc32(payload, used_bytes);
 
-        std::memcpy(write_buf_,                      &hdr,  sizeof(RecordHeader));
-        std::memcpy(write_buf_ + sizeof(RecordHeader), &data, sizeof(Payload));
+        std::memcpy(write_buf_, &hdr, sizeof(RecordHeader));
 
-        if (!ops_.write(ops_.ctx, addr, write_buf_, sizeof(write_buf_)))
-            return false;
+        for (uint32_t off = 0u; off < record_len; off += sector_size_)
+        {
+            const uint32_t len = (record_len - off < sector_size_)
+                                     ? (record_len - off) : sector_size_;
+            if (!ops_.write(ops_.ctx, addr + off, write_buf_ + off, len))
+                return false;
+            Yield();
+        }
 
-        ops_.invalidate(ops_.ctx, addr,
-                        static_cast<uint32_t>(sizeof(write_buf_)));
+        ops_.invalidate(ops_.ctx, addr, record_len);
 
         sectors_[slot][target].valid = true;
         sectors_[slot][target].seq   = hdr.seq;
+        next_seq_++;
         return true;
+    }
+
+    const Payload* Peek(uint8_t slot, uint32_t* seq_out = nullptr) const
+    {
+        if (slot >= kNumSlots) return nullptr;
+
+        uint8_t  best_side = 0xFFu;
+        uint32_t best_seq  = 0u;
+        for (uint8_t side = 0u; side < 2u; side++)
+        {
+            if (!sectors_[slot][side].valid) continue;
+            if (best_side == 0xFFu || sectors_[slot][side].seq > best_seq)
+            {
+                best_side = side;
+                best_seq  = sectors_[slot][side].seq;
+            }
+        }
+        if (best_side == 0xFFu) return nullptr;
+
+        const uintptr_t payload_addr =
+            SideAddr(slot, best_side)
+            + static_cast<uintptr_t>(sizeof(RecordHeader));
+        ops_.invalidate(ops_.ctx, payload_addr,
+                        static_cast<uint32_t>(sizeof(Payload)));
+        if (seq_out) *seq_out = best_seq;
+        return reinterpret_cast<const Payload*>(payload_addr);
+    }
+
+    /**
+     * Invalidate @p slot by erasing the header sector of both sides.
+     * Cheap (2 sector erases vs. a full side rewrite) and safe: a record
+     * without a verifiable header never loads.  Yields between erases.
+     */
+    bool EraseSlot(uint8_t slot)
+    {
+        if (slot >= kNumSlots) return false;
+
+        bool ok = true;
+        for (uint8_t side = 0u; side < 2u; side++)
+        {
+            const uintptr_t a = SideAddr(slot, side);
+            if (!ops_.erase(ops_.ctx, a, a + sector_size_))
+            {
+                ok = false;
+                continue;
+            }
+            Yield();
+            ops_.invalidate(ops_.ctx, a, sector_size_);
+            sectors_[slot][side].valid = false;
+            sectors_[slot][side].seq   = 0u;
+        }
+        return ok;
     }
 
   private:
@@ -210,13 +323,15 @@ class PresetStore
 
     /* ── Helpers ─────────────────────────────────────────────────── */
 
-    uint32_t SideSize()  const { return sector_size_ * sectors_per_side_; }
-    uint32_t SlotSize()  const { return SideSize() * 2u; }
-    uint32_t SideAddr(uint8_t slot, uint8_t side) const
+    void Yield() { if (yield_) yield_(yield_ctx_); }
+
+    uint32_t  SideSize() const { return sector_size_ * sectors_per_side_; }
+    uint32_t  SlotSize() const { return SideSize() * 2u; }
+    uintptr_t SideAddr(uint8_t slot, uint8_t side) const
     {
         return flash_base_
-             + static_cast<uint32_t>(slot) * SlotSize()
-             + static_cast<uint32_t>(side) * SideSize();
+             + static_cast<uintptr_t>(slot) * SlotSize()
+             + static_cast<uintptr_t>(side) * SideSize();
     }
 
     static uint32_t Crc32(const uint8_t* data, size_t len)
@@ -239,10 +354,13 @@ class PresetStore
     struct SectorState { uint32_t seq; bool valid; };
 
     FlashOps    ops_              = {};
-    uint32_t    flash_base_       = 0u;
+    uintptr_t   flash_base_       = 0u;
     uint32_t    sector_size_      = 4096u;
     uint8_t     sectors_per_side_ = 5u;
     uint32_t    next_seq_         = 0u;
+
+    PresetStoreYieldFn yield_     = nullptr;
+    void*              yield_ctx_ = nullptr;
 
     SectorState sectors_[kNumSlots][2] = {};
 

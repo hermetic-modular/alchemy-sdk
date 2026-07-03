@@ -69,13 +69,13 @@ struct QspiCtx { daisy::QSPIHandle* qspi; };
  */
 QspiCtx s_qspi_ctx;
 
-bool v1_erase(void* ctx, uint32_t start, uint32_t end)
+bool v1_erase(void* ctx, uintptr_t start, uintptr_t end)
 {
     auto* c = static_cast<QspiCtx*>(ctx);
     return c->qspi->Erase(start, end) == daisy::QSPIHandle::Result::OK;
 }
 
-bool v1_write(void* ctx, uint32_t addr, const uint8_t* buf, uint32_t len)
+bool v1_write(void* ctx, uintptr_t addr, const uint8_t* buf, uint32_t len)
 {
     auto* c = static_cast<QspiCtx*>(ctx);
     /* QSPIHandle::Write takes a non-const pointer; the cast is safe because
@@ -84,7 +84,7 @@ bool v1_write(void* ctx, uint32_t addr, const uint8_t* buf, uint32_t len)
            == daisy::QSPIHandle::Result::OK;
 }
 
-void v1_invalidate(void* ctx, uint32_t addr, uint32_t len)
+void v1_invalidate(void* ctx, uintptr_t addr, uint32_t len)
 {
     (void)ctx;
     dsy_dma_invalidate_cache_for_buffer(

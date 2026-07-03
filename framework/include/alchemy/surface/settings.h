@@ -157,6 +157,27 @@ class Settings : public Serializable
     bool     Deserialize(const uint8_t* in)  override;
     uint32_t SchemaHash () const override;
 
+    /** ── Introspection (HostLink descriptor generation) ──── */
+
+    /** Control kind at (page, pot); None when out of range. */
+    SettingsKind KindAt(uint8_t page, uint8_t pot) const;
+
+    /** Selector zone count at (page, pot); 0 for non-selectors. */
+    uint8_t ZonesAt(uint8_t page, uint8_t pot) const;
+
+    /** Pot-normalized stored value — the float Serialize() emits. */
+    float StoredNormAt(uint8_t page, uint8_t pot) const;
+
+    /** Selector index — the byte Serialize() emits. */
+    uint8_t SelectorIdxAt(uint8_t page, uint8_t pot) const;
+
+    /** Logical range for Brightness controls (lo/hi). */
+    float RangeLoAt(uint8_t page, uint8_t pot) const;
+    float RangeHiAt(uint8_t page, uint8_t pot) const;
+
+    /** Bytes Serialize() emits for a control of kind @p k. */
+    static size_t PersistedBytesFor(SettingsKind k);
+
   private:
     friend class PotBuilder;
 

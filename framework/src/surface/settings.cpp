@@ -578,4 +578,48 @@ uint32_t Settings::SchemaHash() const
     return h;
 }
 
+/* ── Introspection (HostLink descriptor generation) ────────────────── */
+
+SettingsKind Settings::KindAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return SettingsKind::None;
+    return slots_[page][pot].kind;
+}
+
+uint8_t Settings::ZonesAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return 0u;
+    return slots_[page][pot].num_zones;
+}
+
+float Settings::StoredNormAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return 0.0f;
+    return slots_[page][pot].pot.stored;
+}
+
+uint8_t Settings::SelectorIdxAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return 0u;
+    return slots_[page][pot].value_idx;
+}
+
+float Settings::RangeLoAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return 0.0f;
+    return slots_[page][pot].range_lo;
+}
+
+float Settings::RangeHiAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return 1.0f;
+    return slots_[page][pot].range_hi;
+}
+
+size_t Settings::PersistedBytesFor(SettingsKind k)
+{
+    /* Delegates to the same tables Serialize() uses (file-local above). */
+    return PersistBytes(PersistKindOf(k));
+}
+
 } // namespace alchemy

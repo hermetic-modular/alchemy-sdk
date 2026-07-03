@@ -82,6 +82,8 @@ class Presets
      */
     void Init();
 
+    void SetYield(PresetStoreYieldFn fn, void* ctx);
+
     /** Capture every managed component and write to flash @p slot. */
     bool Save(uint8_t slot);
 
@@ -96,6 +98,61 @@ class Presets
      * matches the currently-managed set.
      */
     bool HasValid(uint8_t slot) const;
+
+    /* ── Host access (HostLink) / introspection ─────────────────────
+     * Everything below operates on the same managed set and the same
+     * wear-levelled store as Save/Load.
+     */
+
+    /** Custom-backend Init for host tests or non-default flash regions. */
+    void Init(const FlashOps& ops, uintptr_t flash_base);
+
+    /** Combined schema hash of the managed set (what slots are stamped with). */
+    uint32_t LiveSchemaHash() const { return SchemaHash(); }
+
+    /** Serialized size of the managed set. */
+    size_t LiveSize() const { return ManagedSize(); }
+
+    /** Serialize every managed component into @p out (≤ @p cap bytes).
+     *  Returns bytes written, or 0 if cap is too small. */
+    size_t SerializeLive(uint8_t* out, size_t cap) const;
+
+    /** Apply a byte stream to the managed set (the Load() path minus
+     *  flash).  @p len must equal LiveSize(). */
+    bool DeserializeLive(const uint8_t* in, size_t len);
+
+    struct SlotInfo
+    {
+        bool     valid;         /* CRC-verified record present          */
+        bool     schema_match;  /* stored hash == LiveSchemaHash()      */
+        uint32_t seq;           /* wear-levelling sequence (0 if none)  */
+        uint16_t length;        /* stored payload length (0 if none)    */
+        uint32_t schema_hash;   /* stored hash (0 if none)              */
+    };
+    SlotInfo InfoFor(uint8_t slot) const;
+
+    /**
+     * Copy up to @p max_len stored payload bytes from @p offset into
+     * @p dst, reading straight from memory-mapped flash.  Returns bytes
+     * copied (0 when offset ≥ stored length) or -1 when the slot holds
+     * no valid record.  @p schema_out / @p total_out are filled on
+     * success when non-null.
+     */
+    int32_t ReadSlotBytes(uint8_t slot, uint32_t offset,
+                          uint8_t* dst, uint16_t max_len,
+                          uint32_t* schema_out, uint16_t* total_out) const;
+
+    bool WriteSlotRaw(uint8_t slot, uint32_t schema_hash,
+                      const uint8_t* bytes, uint16_t len);
+
+    /** Invalidate @p slot (both ping-pong sides). */
+    bool EraseSlot(uint8_t slot);
+
+    uint8_t             NumManaged() const { return num_managed_; }
+    const Serializable* ManagedAt(uint8_t i) const
+    {
+        return (i < num_managed_) ? managed_[i] : nullptr;
+    }
 
   private:
     /* On-flash payload: schema-hash + length-prefixed byte stream. */
