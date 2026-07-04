@@ -8,6 +8,7 @@
 | [`ring_demo/`](ring_demo/) | A stereo tremolo whose rings render the LFO itself: a comet pip on the rate ring, a carved notch + shimmer on the depth ring. | Ring composition — `RingFrame`, `Pip`, `Field`, and the publish-DSP-state pattern for signal-driven animation. |
 | [`v2_cal_test/`](v2_cal_test/) *(V2 only)* | Scope-driven calibration acceptance test: B1 steps all jacks −5..+5 V, B2 toggles calibration on/off, the rings show the target voltage. | The calibrated CV-out API end-to-end, plus the LED panel as a bench instrument. |
 | [`v2_cv_demo/`](v2_cv_demo/) *(V2 only)* | All six jacks auto-cycling ±4 V with cal status on the Seed LED. | The minimal calibrated CV-out wiring — `RouteCvOut` + `SetCvOutVolts` in ~60 lines. |
+| [`hostlink/`](hostlink/) *(V2 only)* | A minimal preset-bearing module manageable from the browser over USB CDC. | The HostLink recipe — one `hostlink::Host` declaration + `loop.Use(host)`; the web editor's layout is derived from the declared surfaces, including a custom self-describing component. |
 
 ---
 
@@ -81,3 +82,37 @@ What the example demonstrates:
 Only `ParamLock` and `LedRender` are linked — `Pager`, `Settings`,
 `Presets`, and `CvRouter` are not in the binary, because a single-page
 percussion module doesn't ask for them.
+
+---
+
+## `hostlink/` — browser preset & settings management *(V2 only)*
+
+[`hostlink.cpp`](hostlink/hostlink.cpp) makes a module manageable from
+the companion website live over the panel USB-C.  The integration is
+one declaration and one attach:
+
+```cpp
+static hostlink::Host host(presets, "hostlink_demo", "HostLink Demo",
+                           "1.0.0", GIT_HASH);
+...
+loop.Use(host);
+```
+
+Everything else is derived or defaulted.  The web editor's layout comes
+from the same objects `Presets` serializes — knob names and value
+transforms become fields and display hints (`.Unit()`, `.Ident()`,
+`.Labels()` refine them), `Page::Name()/Color()` label and tint the
+tabs, `presets.UseNames()` stores renameable preset names in the blob —
+so the descriptor can never drift from the firmware; any mismatch
+reports "no descriptor" instead of shipping a wrong one.  Transport
+(CDC on the panel USB-C), buffers, the MCU unique id, and reboot are
+SDK defaults with fluent overrides; host commands run inside
+`ControlLoop`'s 1 ms poll, the same thread as panel gestures.
+
+The example also shows the extension points: a custom `Serializable`
+(`OutTrim`) that becomes editable in the browser by overriding
+`Describe(ComponentWriter&)`, and — when you outgrow derivation —
+`OnDescribe()` per component or a hand-rolled `DescriptorBuilder`
+descriptor via `host.Descriptor()`.
+
+Protocol and descriptor reference: [`docs/hostlink-protocol.md`](../docs/hostlink-protocol.md).
