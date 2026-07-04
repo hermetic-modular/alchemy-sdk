@@ -50,6 +50,7 @@
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots, kNumCvInputs */
 #include "alchemy/led/perf_renderer.h"
 #include "alchemy/surface/cv_source.h"
+#include "alchemy/surface/host_service.h"
 #include "alchemy/surface/knob_storage.h"
 #include "alchemy/surface/lock_source.h"
 #include "alchemy/surface/page.h"
@@ -135,6 +136,18 @@ class ControlLoop
         return *this;
     }
 
+    /**
+     * Attach a host-communication service (e.g. hostlink::Host).  Polled
+     * from the inner 1 ms loop so host commands execute on the same
+     * thread as panel gestures.
+     */
+    ControlLoop& Use(HostService& h)
+    {
+        host_service_ = &h;
+        h.OnAttach(*this);
+        return *this;
+    }
+
     /* ── Hooks (fluent, optional) ────────────────────────────────────── */
 
     ControlLoop& OnFrame      (FrameFn  fn) { on_frame_       = fn; return *this; }
@@ -161,6 +174,17 @@ class ControlLoop
     const float* Cv()    const { return cv_; }
     uint8_t      NumCv() const { return num_cv_; }
 
+    /* ── Introspection (for attached services, e.g. HostLink) ────────── */
+
+    AlchemyLab*  Hw()               const { return hw_; }
+    KnobStorage* AttachedStorage()  const { return storage_; }
+    Settings*    AttachedSettings() const { return settings_; }
+    uint8_t      NumAttachedPages() const { return num_pages_; }
+    const Page*  AttachedPage(uint8_t i) const
+    {
+        return (i < num_pages_) ? pages_[i] : nullptr;
+    }
+
   private:
     void WireKnobs();
     void Render(uint32_t t_ms);
@@ -186,10 +210,11 @@ class ControlLoop
     uint8_t num_cv_             = kNumCvInputs;
 
     /* Attached surfaces. */
-    KnobStorage* storage_   = nullptr;
-    LockSource*  locks_     = nullptr;
-    CvSource*    cv_source_ = nullptr;
-    Settings*    settings_  = nullptr;
+    KnobStorage* storage_      = nullptr;
+    LockSource*  locks_        = nullptr;
+    CvSource*    cv_source_    = nullptr;
+    Settings*    settings_     = nullptr;
+    HostService* host_service_ = nullptr;
 
     /* Attached pages (each carries its own knob list). */
     Page*   pages_[kMaxPages] = {};

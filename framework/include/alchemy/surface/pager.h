@@ -116,6 +116,8 @@ class Pager : public Serializable, public KnobStorage
     bool     Deserialize(const uint8_t* in)  override;
     uint32_t SchemaHash () const override;
 
+    DescKind DescribeKind() const override { return DescKind::Pager; }
+
   private:
     IButton*       b1_;
     uint8_t        num_pages_;

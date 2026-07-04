@@ -68,6 +68,12 @@ class Page
     /** Empty the page. */
     void Clear() { count_ = 0; }
 
+    /* ── Tab identity (optional; HostLink descriptors label and tint the
+     *    web editor's page tabs from these — pass string literals) ────── */
+
+    Page& Name (const char* name)    { name_  = name;  return *this; }
+    Page& Color(const char* css_hex) { color_ = css_hex; return *this; }
+
     /* ── Read accessors ───────────────────────────────────────────────── */
 
     uint8_t      Index() const { return idx_; }
@@ -76,10 +82,14 @@ class Page
     {
         return (i < count_) ? knobs_[i] : nullptr;
     }
+    const char*  TabName () const { return name_; }
+    const char*  TabColor() const { return color_; }
 
   private:
     uint8_t      idx_;
     uint8_t      count_         = 0;
+    const char*  name_          = nullptr;
+    const char*  color_         = nullptr;
     VirtualKnob* knobs_[kMaxKnobs] = {};
 };
 

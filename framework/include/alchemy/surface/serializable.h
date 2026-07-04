@@ -28,10 +28,32 @@
 
 namespace alchemy {
 
+namespace hostlink { class ComponentWriter; }
+
 class Serializable
 {
   public:
     virtual ~Serializable() = default;
+
+    /** Component archetype, used by HostLink descriptor auto-derivation
+     *  to recognize the standard surfaces.  User components keep the
+     *  Opaque default and may implement Describe() instead. */
+    enum class DescKind : uint8_t { Opaque, Pager, Settings, Name };
+
+    virtual DescKind DescribeKind() const { return DescKind::Opaque; }
+
+    /**
+     * Optional self-description for HostLink hosts (see
+     * alchemy/host_link/component_writer.h).  Emit this component's
+     * editable fields into @p w and return true; return false — writing
+     * NOTHING to @p w — to be treated as an opaque byte blob (the
+     * default).  Only consulted when the firmware links HostLink.
+     */
+    virtual bool Describe(hostlink::ComponentWriter& w) const
+    {
+        (void)w;
+        return false;
+    }
 
     /** Number of bytes this object will write into Serialize(). */
     virtual size_t SerializedSize() const = 0;

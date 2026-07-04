@@ -14,7 +14,32 @@ Presets::Presets(daisy::QSPIHandle& qspi) : qspi_(&qspi) {}
 void Presets::Manage(Serializable& s)
 {
     if (num_managed_ >= kPresetMaxManaged) return;
+    if (use_names_)
+    {
+        /* The UseNames() component stays pinned last: insert new
+         * registrations just below it. */
+        managed_[num_managed_]      = managed_[num_managed_ - 1u];
+        managed_[num_managed_ - 1u] = &s;
+        num_managed_++;
+        return;
+    }
     managed_[num_managed_++] = &s;
+}
+
+PresetName& Presets::UseNames()
+{
+    if (!use_names_ && num_managed_ < kPresetMaxManaged)
+    {
+        managed_[num_managed_++] = &name_component_;
+        use_names_ = true;
+    }
+    return name_component_;
+}
+
+void Presets::SetPreBootHook(void (*fn)(void*), void* ctx)
+{
+    pre_boot_fn_  = fn;
+    pre_boot_ctx_ = ctx;
 }
 
 void Presets::Init()
@@ -88,7 +113,17 @@ bool Presets::Load(uint8_t slot)
     return true;
 }
 
-bool Presets::BootLoad() { return HasValid(0) && Load(0); }
+bool Presets::BootLoad()
+{
+    if (pre_boot_fn_)
+    {
+        /* One-shot: components still hold factory defaults here. */
+        void (*fn)(void*) = pre_boot_fn_;
+        pre_boot_fn_ = nullptr;
+        fn(pre_boot_ctx_);
+    }
+    return HasValid(0) && Load(0);
+}
 
 /* ── Host access (HostLink) ───────────────────────────────────────── */
 

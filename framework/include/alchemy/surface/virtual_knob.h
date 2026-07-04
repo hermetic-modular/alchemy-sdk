@@ -262,6 +262,8 @@ struct Custom
 class VirtualKnob
 {
   public:
+    enum class Xform : uint8_t { Linear, Exp, Selector };
+
     /**
      * Construct an unconfigured knob.
      *
@@ -349,6 +351,31 @@ class VirtualKnob
         return *this;
     }
 
+    /* ── Host descriptor metadata (all optional; string literals) ────────
+     * Consumed by HostLink's descriptor auto-derivation.  Without them a
+     * knob still appears in the web editor — named after Name(), with a
+     * display hint derived from its value transform and a positional
+     * field id.  See alchemy/host_link/describe.h. */
+
+    /** Stable field id (e.g. "flt.cutoff").  Defaults to the positional
+     *  "p<page>.<pot>"; set one to keep host presets addressable when the
+     *  knob later moves to a different pot. */
+    VirtualKnob& Ident(const char* id) { ident_ = id; return *this; }
+
+    /** Engineering unit shown next to the value (e.g. "Hz", "dB"). */
+    VirtualKnob& Unit(const char* unit) { unit_ = unit; return *this; }
+
+    /** Zone labels for a Selector knob (array of NumZones entries). */
+    VirtualKnob& Labels(const char* const* labels, uint8_t n)
+    {
+        labels_     = labels;
+        num_labels_ = n;
+        return *this;
+    }
+
+    /** Raw display-hint JSON (protocol §5); overrides the derived hint. */
+    VirtualKnob& Disp(const char* disp_json) { disp_json_ = disp_json; return *this; }
+
     /* ── Read accessors (ISR-safe; cheap) ────────────────────────────── */
 
     /**
@@ -382,6 +409,15 @@ class VirtualKnob
     uint8_t          Pot()  const { return pot_; }
     const char*      Name() const { return name_; }
     const ParamSlot& Slot() const { return slot_; }
+
+    const char*        Ident()     const { return ident_; }
+    const char*        Unit()      const { return unit_; }
+    const char* const* Labels()    const { return labels_; }
+    uint8_t            NumLabels() const { return num_labels_; }
+    const char*        DispJson()  const { return disp_json_; }
+    Xform              Transform() const { return xform_; }
+    float              XformMin()  const { return xform_min_; }
+    float              XformMax()  const { return xform_max_; }
 
     /* ── Wiring (called by ControlLoop at attach time) ───────────────── */
 
@@ -442,8 +478,6 @@ class VirtualKnob
     void*  OverdrawCtx()    const { return overdraw_ctx_; }
 
   private:
-    enum class Xform : uint8_t { Linear, Exp, Selector };
-
     /* Read helpers — all ISR-safe. */
 
     float StoredValue() const
@@ -501,6 +535,13 @@ class VirtualKnob
     /* Identity. */
     uint8_t     pot_  = 0;
     const char* name_ = "";
+
+    /* Host descriptor metadata (optional). */
+    const char*        ident_      = nullptr;
+    const char*        unit_       = nullptr;
+    const char*        disp_json_  = nullptr;
+    const char* const* labels_     = nullptr;
+    uint8_t            num_labels_ = 0;
 
     /* Transform. */
     Xform xform_     = Xform::Linear;

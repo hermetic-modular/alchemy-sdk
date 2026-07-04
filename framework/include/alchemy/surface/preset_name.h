@@ -59,6 +59,8 @@ class PresetName : public Serializable
         return 0x4E414D45u /* 'NAME' */ ^ static_cast<uint32_t>(kCapacity);
     }
 
+    DescKind DescribeKind() const override { return DescKind::Name; }
+
   private:
     char buf_[kCapacity];
 };

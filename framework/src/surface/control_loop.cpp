@@ -65,6 +65,7 @@ void ControlLoop::Tick()
         if (cv_source_) cv_source_->PollEdges(cv_, daisy::System::GetUs(), gated);
         if (locks_)   locks_  ->PollButtons(t_ms, gated);
         if (storage_) storage_->PollButtons(t_ms, gated);
+        if (host_service_) host_service_->Poll(t_ms);
         if (on_poll_) on_poll_(t_ms);
 
         daisy::System::Delay(poll_ms_);

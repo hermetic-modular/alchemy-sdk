@@ -110,6 +110,14 @@ class Settings : public Serializable
       public:
         PageBuilder(Settings& s, uint8_t page) : s_(s), page_(page) {}
         PotBuilder Pot(uint8_t p) { return PotBuilder(s_, page_, p); }
+
+        /** Tab label for this page in HostLink hosts (string literal). */
+        PageBuilder& Name(const char* name)
+        {
+            s_.page_names_[page_] = name;
+            return *this;
+        }
+
       private:
         Settings& s_;
         uint8_t   page_;
@@ -178,8 +186,19 @@ class Settings : public Serializable
     /** Bytes Serialize() emits for a control of kind @p k. */
     static size_t PersistedBytesFor(SettingsKind k);
 
+    /** Tab label declared via Page(pg).Name(...); nullptr when unset. */
+    const char* PageNameAt(uint8_t page) const
+    {
+        return (page < kSettingsMaxPages) ? page_names_[page] : nullptr;
+    }
+
+    DescKind DescribeKind() const override { return DescKind::Settings; }
+
   private:
     friend class PotBuilder;
+
+    /* HostLink tab labels (set via PageBuilder::Name). */
+    const char* page_names_[kSettingsMaxPages] = {};
 
     /* Mode-flag gesture state. */
     IButton*       b2_              = nullptr;

@@ -30,6 +30,7 @@
 #include <cstddef>
 #include "alchemy/control/preset_store.h"
 #include "alchemy/hw/alchemy_lab_layout.h"  /* PresetFlashOps, kPresetFlashBase, etc. */
+#include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/serializable.h"
 
 namespace daisy { class QSPIHandle; }
@@ -92,6 +93,24 @@ class Presets
 
     /** Restore slot 0 if valid; convenience for boot-time auto-load. */
     bool BootLoad();
+
+    /**
+     * Store preset display names inside the blob itself, so names travel
+     * with the hardware and inside exports (hosts read and edit them via
+     * the descriptor's "name" component).  The owned PresetName is kept
+     * pinned LAST in the manage order no matter when this is called, so
+     * no other component's blob offset ever depends on call position.
+     * Returns the component (e.g. to seed a factory name).
+     */
+    PresetName& UseNames();
+
+    /**
+     * One-shot hook fired at the top of the next BootLoad(), before the
+     * boot preset deserializes.  HostLink registers its descriptor render
+     * here so captured defaults are factory defaults; app code normally
+     * never calls this.  One slot — later calls replace earlier ones.
+     */
+    void SetPreBootHook(void (*fn)(void*), void* ctx);
 
     /**
      * True if @p slot holds a CRC-verified record whose schema hash
@@ -177,6 +196,13 @@ class Presets
     PresetStore<PresetBlob, kNumSlots> store_;
     Serializable*                     managed_[kPresetMaxManaged] = {};
     uint8_t                           num_managed_ = 0;
+
+    /* UseNames() state — see Manage() for the pin-last insertion. */
+    PresetName                        name_component_;
+    bool                              use_names_ = false;
+
+    void (*pre_boot_fn_)(void*) = nullptr;
+    void*  pre_boot_ctx_        = nullptr;
 };
 
 } // namespace alchemy
