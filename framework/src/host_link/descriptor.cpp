@@ -68,7 +68,9 @@ void DescriptorBuilder::OpenComponent(const char* id, const char* kind,
 
 /* ── Pager ──────────────────────────────────────────────────────────── */
 
-bool DescriptorBuilder::BeginPager(const char* id, const Pager& pager)
+bool DescriptorBuilder::BeginPager(const char* id, const Pager& pager,
+                                   const char* const* page_names,
+                                   const char* const* page_colors)
 {
     if (!CheckManaged(pager)) return false;
 
@@ -83,10 +85,34 @@ bool DescriptorBuilder::BeginPager(const char* id, const Pager& pager)
 
     w_.Key("pages"); w_.UInt(pager.NumPages());
     w_.Key("pots");  w_.UInt(pager.NumPots());
+    EmitPageMeta(page_names, page_colors, pager.NumPages());
     w_.Key("fields");
     w_.BeginArr();
     fields_open_ = true;
     return !error_;
+}
+
+/* Optional per-page tab labels/colors ("pageNames" / "pageColors").
+ * Null array pointers emit nothing; null entries emit "" so hosts fall
+ * back to a generic label for just that page. */
+void DescriptorBuilder::EmitPageMeta(const char* const* names,
+                                     const char* const* colors,
+                                     uint8_t num_pages)
+{
+    if (names)
+    {
+        w_.Key("pageNames");
+        w_.BeginArr();
+        for (uint8_t i = 0; i < num_pages; i++) w_.Str(names[i] ? names[i] : "");
+        w_.EndArr();
+    }
+    if (colors)
+    {
+        w_.Key("pageColors");
+        w_.BeginArr();
+        for (uint8_t i = 0; i < num_pages; i++) w_.Str(colors[i] ? colors[i] : "");
+        w_.EndArr();
+    }
 }
 
 bool DescriptorBuilder::PagerField(uint8_t page, uint8_t pot,
@@ -192,12 +218,15 @@ bool DescriptorBuilder::Name(const char* id, const Serializable& s)
 
 /* ── Settings ───────────────────────────────────────────────────────── */
 
-bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings)
+bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,
+                                      const char* const* page_names,
+                                      const char* const* page_colors)
 {
     if (!CheckManaged(settings)) return false;
 
     settings_ = &settings;
     OpenComponent(id, "settings", settings);
+    EmitPageMeta(page_names, page_colors, settings.NumPages());
 
     /* Walk (page, pot) in the exact Serialize() order, accumulating the
      * per-slot byte offsets.  The final total must equal the component's

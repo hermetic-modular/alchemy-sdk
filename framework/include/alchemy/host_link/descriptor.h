@@ -61,7 +61,17 @@ class DescriptorBuilder
     bool Begin(const ModuleInfo& m);
 
     /* ── Pager component ────────────────────────────────────────── */
-    bool BeginPager(const char* id, const Pager& pager);
+    /**
+     * @p page_names / @p page_colors, when non-null, are arrays of
+     * exactly NumPages() entries emitted as the component's optional
+     * "pageNames" / "pageColors" keys — hosts label and tint the page
+     * tabs from them.  Entries may be nullptr (emitted empty; the host
+     * falls back to a generic label for that page).  Colors are CSS hex
+     * strings, e.g. "#67e8f9".
+     */
+    bool BeginPager(const char* id, const Pager& pager,
+                    const char* const* page_names  = nullptr,
+                    const char* const* page_colors = nullptr);
     /** One field per (page, pot); disp_json may be nullptr for a plain
      *  percent readout.  def is captured from the pager's stored value. */
     bool PagerField(uint8_t page, uint8_t pot,
@@ -85,7 +95,10 @@ class DescriptorBuilder
     bool Name(const char* id, const Serializable& s);
 
     /* ── Settings component ─────────────────────────────────────── */
-    bool BeginSettings(const char* id, const Settings& settings);
+    /** Page names/colors as in BeginPager (Settings::NumPages() entries). */
+    bool BeginSettings(const char* id, const Settings& settings,
+                       const char* const* page_names  = nullptr,
+                       const char* const* page_colors = nullptr);
     bool SettingsField(uint8_t page, uint8_t pot,
                        const char* field_id, const char* name,
                        const char* disp_json);
@@ -102,6 +115,8 @@ class DescriptorBuilder
     bool CheckManaged(const Serializable& s);
     void OpenComponent(const char* id, const char* kind,
                        const Serializable& s);
+    void EmitPageMeta(const char* const* names, const char* const* colors,
+                      uint8_t num_pages);
 
     JsonWriter     w_;
     const Presets& presets_;

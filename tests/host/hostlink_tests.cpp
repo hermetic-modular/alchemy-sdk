@@ -719,8 +719,9 @@ static std::string BuildTestDescriptor(SurfaceFixture& sf, bool& ok)
     ok = true;
     ok &= db.Begin({"testmod", "Test Module", "1.2.3", "abc1234",
                     "1.0.0-beta", "v1"});
-    ok &= db.BeginPager("perf", sf.pager);
     static const char* names[3] = {"Time", "Space", "Engine"};
+    static const char* colors[3] = {"#86efac", "#fca5a5", "#67e8f9"};
+    ok &= db.BeginPager("perf", sf.pager, names, colors);
     for (uint8_t pg = 0; pg < 3; pg++)
         for (uint8_t p = 0; p < 6; p++)
         {
@@ -737,7 +738,9 @@ static std::string BuildTestDescriptor(SurfaceFixture& sf, bool& ok)
     ok &= db.PagerAltMap("s.layout", kAltIds, 18);
     ok &= db.EndPager();
     ok &= db.Opaque("motion", sf.motion, "Motion recording");
-    ok &= db.BeginSettings("settings", sf.settings);
+    /* One nullptr entry — emitted as "" so hosts fall back per-page. */
+    static const char* set_names[4] = {"Routing", "Global", nullptr, "Atten"};
+    ok &= db.BeginSettings("settings", sf.settings, set_names, nullptr);
     ok &= db.SettingsField(0, 0, "s.mode", "Delay Mode",
                            "{\"kind\":\"enum\",\"labels\":[\"Series\","
                            "\"Parallel\",\"Isolated\",\"Spectral\"]}");
@@ -765,6 +768,13 @@ static void TestDescriptorBuilder()
     /* Pager: 3×6×4 bytes. */
     CHECK(json.find("\"kind\":\"pager\",\"hash\":") != std::string::npos);
     CHECK(json.find("\"pages\":3,\"pots\":6") != std::string::npos);
+    /* Page tab metadata. */
+    CHECK(json.find("\"pageNames\":[\"Time\",\"Space\",\"Engine\"]")
+          != std::string::npos);
+    CHECK(json.find("\"pageColors\":[\"#86efac\",\"#fca5a5\",\"#67e8f9\"]")
+          != std::string::npos);
+    CHECK(json.find("\"pageNames\":[\"Routing\",\"Global\",\"\",\"Atten\"]")
+          != std::string::npos);
     /* Captured default. */
     CHECK(json.find("\"def\":0.61") != std::string::npos);
     /* Settings offsets: p0(sel 1B @0, knob 4B @1) p1(bright 4B @5)
