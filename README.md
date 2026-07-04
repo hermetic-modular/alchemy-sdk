@@ -128,6 +128,50 @@ See [`cv_playground.cpp`](examples/cv_playground/cv_playground.cpp) for all of t
 
 All output ranges are ±5 V at the panel.
 
+## HostLink — live host preset & settings access
+
+`alchemy::hostlink` exposes a module's preset slots and live state to a
+host (the companion website, the `tools/hostlink-cli` bench tool) over
+USB CDC serial, **while the module runs normally.** Protocol spec:
+[`docs/hostlink-protocol.md`](docs/hostlink-protocol.md).
+
+In practice, this is what allows you to connect to the preset manager in hermeticmodular.com
+
+The clearest way to dive in is to review the example in [`hostlink.cpp`](examples/hostlink/hostlink.cpp) 
+
+It builds directly on the existing `Presets` / `Serializable` machinery,
+so any app that already calls `presets.Manage(...)` gets backup/restore
+for free; adding field labels gets it a full descriptor-driven editor on
+the host with zero host-side code per module.
+
+```cpp
+#include "alchemy/host_link/cdc_transport.h"
+#include "alchemy/host_link/host_link.h"
+
+static alchemy::hostlink::CdcUsbTransport transport;
+static uint8_t staging[alchemy::kPresetBlobCapacity]  DSY_SDRAM_BSS;
+static uint8_t snapshot[alchemy::kPresetBlobCapacity] DSY_SDRAM_BSS;
+static alchemy::hostlink::HostLink link(
+    transport, presets,
+    {.module_id="mymod", .module_name="My Module", .fw_version="1.0.0",
+     .fw_git=GIT_HASH, .sdk_version=ALCHEMY_SDK_VERSION,
+     .board=2, .boot_slot=0},
+    staging, snapshot, sizeof(staging));
+
+transport.Init(hw.seed.usb_handle, daisy::UsbHandle::FS_EXTERNAL,
+               "Alchemy Lab");
+link.SetDescriptor(descriptor_json, descriptor_len);  // optional but recommended
+link.SetUid(mcu_uid);
+link.SetRebootHandler(&reboot, nullptr);
+
+// in the control loop (1 ms inner poll recommended):
+link.Poll(now_ms);   // pump + command execution
+```
+
+All command execution happens in `Poll()` (the control-loop context),
+never the audio ISR, so host commands serialize naturally with on-device
+gestures.
+
 ## Bootloader Information
 
 Alchemy Lab V2 boards run a board-specific fork of the Daisy bootloader. It serves DFU on the front-panel
