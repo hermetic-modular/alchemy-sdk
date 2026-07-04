@@ -216,6 +216,93 @@ bool DescriptorBuilder::Name(const char* id, const Serializable& s)
     return !error_;
 }
 
+/* ── Generic component ──────────────────────────────────────────────── */
+
+bool DescriptorBuilder::BeginComponent(const char* id, const char* kind,
+                                       const Serializable& s,
+                                       const char* display_name)
+{
+    if (pager_ || settings_ || generic_open_) { error_ = true; return false; }
+    if (!CheckManaged(s)) return false;
+
+    OpenComponent(id, kind, s);
+    if (display_name) { w_.Key("name"); w_.Str(display_name); }
+    generic_open_ = true;
+    return !error_;
+}
+
+bool DescriptorBuilder::ComponentGrid(uint8_t pages, uint8_t pots)
+{
+    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    w_.Key("pages"); w_.UInt(pages);
+    w_.Key("pots");  w_.UInt(pots);
+    return !error_;
+}
+
+bool DescriptorBuilder::ComponentPageMeta(const char* const* names,
+                                          const char* const* colors,
+                                          uint8_t num_pages)
+{
+    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    EmitPageMeta(names, colors, num_pages);
+    return !error_;
+}
+
+bool DescriptorBuilder::GenericField(const char* id, const char* name,
+                                     uint32_t off, FieldType type, float def,
+                                     uint16_t zones, const char* disp_json,
+                                     int16_t page, int16_t pot)
+{
+    if (!generic_open_) { error_ = true; return false; }
+    if (!fields_open_)
+    {
+        w_.Key("fields");
+        w_.BeginArr();
+        fields_open_ = true;
+    }
+
+    /* Same bound the shaped builders enforce: a field must lie inside
+     * the component's serialized bytes. */
+    const uint32_t width = (type == FieldType::Enum) ? 1u : 4u;
+    if (off + width > comp_size_) { error_ = true; return false; }
+
+    w_.BeginObj();
+    w_.Key("id");   w_.Str(id);
+    w_.Key("name"); w_.Str(name);
+    w_.Key("off");  w_.UInt(off);
+    if (page >= 0) { w_.Key("page"); w_.UInt(static_cast<uint32_t>(page)); }
+    if (pot  >= 0) { w_.Key("pot");  w_.UInt(static_cast<uint32_t>(pot)); }
+    if (type == FieldType::Enum)
+    {
+        if (zones == 0u) { error_ = true; return false; }
+        w_.Key("type");  w_.Str("enum");
+        w_.Key("zones"); w_.UInt(zones);
+        w_.Key("def");   w_.UInt(static_cast<uint32_t>(def));
+        w_.Key("disp");
+        w_.RawValue(disp_json ? disp_json : "{\"kind\":\"enum\"}");
+    }
+    else
+    {
+        w_.Key("type"); w_.Str("f32");
+        w_.Key("def");  w_.Float(def);
+        w_.Key("disp");
+        w_.RawValue(disp_json ? disp_json : "{\"kind\":\"norm\"}");
+    }
+    w_.EndObj();
+    return !error_;
+}
+
+bool DescriptorBuilder::EndComponent()
+{
+    if (!generic_open_) { error_ = true; return false; }
+    if (fields_open_) { w_.EndArr(); fields_open_ = false; }
+    w_.EndObj();
+    cum_off_ += comp_size_;
+    comp_index_++;
+    generic_open_ = false;
+    return !error_;
+}
+
 /* ── Settings ───────────────────────────────────────────────────────── */
 
 bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,

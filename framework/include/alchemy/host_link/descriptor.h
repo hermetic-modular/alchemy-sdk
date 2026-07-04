@@ -43,6 +43,9 @@ class Serializable;
 
 namespace hostlink {
 
+/** Wire field types (protocol §5). */
+enum class FieldType : uint8_t { F32, Enum };
+
 class DescriptorBuilder
 {
   public:
@@ -94,6 +97,35 @@ class DescriptorBuilder
      * read and rewrite in place.  Size comes from the component. */
     bool Name(const char* id, const Serializable& s);
 
+    /* ── Generic component ───────────────────────────────────────────
+     * For custom Serializables (or hand-rolled overrides of the shaped
+     * builders above): any kind string, fields at explicit byte offsets.
+     * Hosts render unknown field-bearing kinds as a plain editable group
+     * and treat field-less kinds as opaque.  Same drift guards: offsets
+     * are validated against the component's SerializedSize() and the
+     * component must be the next one in Manage() order. */
+
+    bool BeginComponent(const char* id, const char* kind,
+                        const Serializable& s,
+                        const char* display_name = nullptr);
+    /** Optional "pages"/"pots" grid keys (before the first field). */
+    bool ComponentGrid(uint8_t pages, uint8_t pots);
+    /** Optional page tab labels/colors (before the first field). */
+    bool ComponentPageMeta(const char* const* names,
+                           const char* const* colors, uint8_t num_pages);
+    /**
+     * One field at byte offset @p off within the component.  @p def is
+     * the factory default (zone index for Enum).  @p zones is required
+     * for Enum fields.  @p page / @p pot are emitted when ≥ 0 (only
+     * meaningful for pager/settings-shaped kinds).  @p disp_json may be
+     * nullptr for a plain percent/enum readout.
+     */
+    bool GenericField(const char* id, const char* name, uint32_t off,
+                      FieldType type, float def, uint16_t zones,
+                      const char* disp_json,
+                      int16_t page = -1, int16_t pot = -1);
+    bool EndComponent();
+
     /* ── Settings component ─────────────────────────────────────── */
     /** Page names/colors as in BeginPager (Settings::NumPages() entries). */
     bool BeginSettings(const char* id, const Settings& settings,
@@ -127,8 +159,9 @@ class DescriptorBuilder
     uint32_t comp_size_   = 0u;
 
     /* Pager context. */
-    const Pager* pager_       = nullptr;
-    bool         fields_open_ = false;
+    const Pager* pager_        = nullptr;
+    bool         fields_open_  = false;
+    bool         generic_open_ = false;
 
     /* Settings context: serialized offset per (page, pot); -1 when the
      * slot persists nothing. */

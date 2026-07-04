@@ -21,15 +21,18 @@
 
 #include "alchemy/host_link/cobs.h"
 #include "alchemy/host_link/crc32.h"
+#include "alchemy/host_link/describe.h"
 #include "alchemy/host_link/descriptor.h"
 #include "alchemy/host_link/frame.h"
 #include "alchemy/host_link/host_link.h"
 #include "alchemy/host_link/wire.h"
 #include "alchemy/hw/alchemy_lab.h"
+#include "alchemy/surface/page.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
+#include "alchemy/surface/virtual_knob.h"
 
 using namespace alchemy;
 using namespace alchemy::hostlink;
@@ -832,6 +835,236 @@ static void TestDescriptorBuilder()
     }
 }
 
+/* ── Descriptor auto-derivation (describe.h) ───────────────────────── */
+
+static const DescriptorBuilder::ModuleInfo kAutoInfo =
+    {"automod", "Auto Module", "1.0.0", "abc1234", "1.0.0-beta", "v2"};
+
+/** Custom Serializable that self-describes two fields. */
+template <size_t N>
+struct FieldedComp : TestComp<N>
+{
+    explicit FieldedComp(uint32_t hash) : TestComp<N>(hash) {}
+
+    bool Describe(ComponentWriter& w) const override
+    {
+        w.Label("Gate Trim");
+        bool ok = w.Field("trim.rise", "Rise", 0, FieldType::F32, 0.25f,
+                          "{\"kind\":\"exp\",\"lo\":0.001,\"hi\":1,"
+                          "\"unit\":\"s\"}");
+        ok &= w.Field("trim.mode", "Mode", 4, FieldType::Enum, 1.f,
+                      "{\"kind\":\"enum\",\"labels\":[\"Slow\",\"Fast\"]}",
+                      /*zones=*/2);
+        return ok;
+    }
+};
+
+static void TestAutoDescribe()
+{
+    SurfaceFixture sf;
+    sf.settings.Page(0).Name("Setup");
+    sf.settings.Page(1).Name("Lights");
+
+    /* Declared pages: knobs carry names, transforms, and metadata the
+     * derivation should pick up.  Page 2 is deliberately undeclared —
+     * its fields must fall back to positional ids and generic names. */
+    static const char* kEngines[4] = {"Digi", "BBD", "Tape", "Vinyl"};
+    VirtualKnob cutoff = VirtualKnob(0, "Cutoff")
+                             .Exp(20.f, 12000.f)
+                             .Unit("Hz")
+                             .Ident("flt.cutoff");
+    VirtualKnob drive  = VirtualKnob(1, "Drive").Linear(0.f, 24.f).Unit("dB");
+    VirtualKnob engine = VirtualKnob(2, "Engine").Selector(4).Labels(kEngines, 4);
+    VirtualKnob plain  = VirtualKnob(3, "Plain");
+    VirtualKnob rawd   = VirtualKnob(0, "Raw")
+                             .Disp("{\"kind\":\"percent\",\"scale\":110}");
+
+    Page p0 = Page(0).Name("Time").Color("#86efac");
+    p0.Knobs(cutoff, drive, engine, plain);
+    Page p1 = Page(1).Name("Space");
+    p1.Knobs(rawd);
+
+    const Page*   page_refs[2] = {&p0, &p1};
+    const PageSet pages{page_refs, 2};
+
+    static char buf[16384];
+    const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                          sf.presets, &pages, nullptr, 0);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* Page tabs from Page declarations (sparse: page 2 unnamed → ""). */
+    CHECK(json.find("\"pageNames\":[\"Time\",\"Space\",\"\"]") != std::string::npos);
+    CHECK(json.find("\"pageColors\":[\"#86efac\",\"\",\"\"]") != std::string::npos);
+
+    /* Knob-derived fields: Ident override, derived exp/linear/snap disp. */
+    CHECK(json.find("\"id\":\"flt.cutoff\",\"name\":\"Cutoff\"") != std::string::npos);
+    CHECK(json.find("{\"kind\":\"exp\",\"lo\":20,\"hi\":12000,\"unit\":\"Hz\"}")
+          != std::string::npos);
+    CHECK(json.find("{\"kind\":\"linear\",\"lo\":0,\"hi\":24,\"unit\":\"dB\"}")
+          != std::string::npos);
+    CHECK(json.find("{\"kind\":\"snap\",\"labels\":[\"Digi\",\"BBD\",\"Tape\","
+                    "\"Vinyl\"]}")
+          != std::string::npos);
+    /* Positional id for the un-Ident()ed knob; raw .Disp() passthrough. */
+    CHECK(json.find("\"id\":\"p0.1\",\"name\":\"Drive\"") != std::string::npos);
+    CHECK(json.find("\"id\":\"p1.0\",\"name\":\"Raw\"") != std::string::npos);
+    CHECK(json.find("{\"kind\":\"percent\",\"scale\":110}") != std::string::npos);
+    /* Undeclared position → generic name, percent readout. */
+    CHECK(json.find("\"id\":\"p2.0\",\"name\":\"P3 K1\"") != std::string::npos);
+
+    /* Un-described component → opaque fallback with a generic label. */
+    CHECK(json.find("\"kind\":\"opaque\"") != std::string::npos);
+    CHECK(json.find("\"name\":\"Data 1\"") != std::string::npos);
+
+    /* Settings: page names from the builder, kind-derived field names
+     * (each kind unique in the fixture → plain names), positional ids. */
+    CHECK(json.find("\"pageNames\":[\"Setup\",\"Lights\",\"\",\"\"]")
+          != std::string::npos);
+    CHECK(json.find("\"id\":\"s0.0\",\"name\":\"Mode\"") != std::string::npos);
+    CHECK(json.find("\"id\":\"s0.1\",\"name\":\"Knob\"") != std::string::npos);
+    CHECK(json.find("\"id\":\"s1.0\",\"name\":\"Brightness\"") != std::string::npos);
+    CHECK(json.find("\"id\":\"s3.2\",\"name\":\"Amount\"") != std::string::npos);
+
+    /* Name component described last (fixture manages it last). */
+    CHECK(json.find("\"id\":\"name\",\"kind\":\"name\"") != std::string::npos);
+
+    /* Whole thing parses as the same layout the manual builder pins:
+     * schema hash + total size are properties of the fixture, and the
+     * auto path must agree with them. */
+    CHECK(json.find("\"schemaHash\":") != std::string::npos);
+
+    /* Without a PageSet the pager still describes — positional only. */
+    {
+        static char buf2[16384];
+        const uint32_t len2 = RenderDescriptor(buf2, sizeof buf2, kAutoInfo,
+                                               sf.presets, nullptr, nullptr, 0);
+        CHECK(len2 > 0u);
+        const std::string j2(buf2, len2);
+        /* No pager tab metadata (the settings component keeps its own). */
+        CHECK(j2.find("\"pageNames\":[\"Time") == std::string::npos);
+        CHECK(j2.find("\"id\":\"p0.0\",\"name\":\"P1 K1\"") != std::string::npos);
+    }
+}
+
+static void TestAutoDescribeGenericAndOverrides()
+{
+    RamFlash flash;
+    Presets  presets{g_dummy_qspi};
+
+    FieldedComp<8> trim{0x51515151u};
+    TestComp<4>    blob{0x62626262u};
+
+    presets.Manage(trim);
+    presets.Manage(blob);
+    presets.Init(flash.Ops(), flash.Base());
+
+    /* Self-describing custom component + opaque fallback. */
+    {
+        static char buf[8192];
+        const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                              presets, nullptr, nullptr, 0);
+        CHECK(len > 0u);
+        const std::string json(buf, len);
+        CHECK(json.find("\"kind\":\"fields\"") != std::string::npos);
+        CHECK(json.find("\"name\":\"Gate Trim\"") != std::string::npos);
+        CHECK(json.find("\"id\":\"trim.rise\",\"name\":\"Rise\",\"off\":0")
+              != std::string::npos);
+        CHECK(json.find("\"id\":\"trim.mode\",\"name\":\"Mode\",\"off\":4,"
+                        "\"type\":\"enum\",\"zones\":2,\"def\":1")
+              != std::string::npos);
+        /* Generic fields carry no page/pot keys. */
+        CHECK(json.find("\"off\":0,\"type\":\"f32\"") != std::string::npos);
+        CHECK(json.find("\"kind\":\"opaque\"") != std::string::npos);
+        CHECK(json.find("\"name\":\"Data 1\"") != std::string::npos);
+    }
+
+    /* An override beats the component's own Describe(). */
+    {
+        const DescribeOverride ovr[1] = {{
+            &trim,
+            [](ComponentWriter& w, void*) -> bool
+            {
+                w.Kind("opaque").Label("Motion loops");
+                return true;
+            },
+            nullptr,
+        }};
+        static char buf[8192];
+        const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                              presets, nullptr, ovr, 1);
+        CHECK(len > 0u);
+        const std::string json(buf, len);
+        CHECK(json.find("\"name\":\"Motion loops\"") != std::string::npos);
+        CHECK(json.find("trim.rise") == std::string::npos);
+    }
+
+    /* A describer that writes out of bounds fails the whole build —
+     * "no descriptor" beats a wrong one. */
+    {
+        const DescribeOverride ovr[1] = {{
+            &blob,
+            [](ComponentWriter& w, void*) -> bool
+            {
+                /* blob is 16 bytes (TestComp<4> = 4 floats). */
+                return w.Field("x", "X", 16, FieldType::F32, 0.f);
+            },
+            nullptr,
+        }};
+        static char buf[8192];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, presets,
+                                  nullptr, ovr, 1),
+                 0u);
+    }
+
+    /* Metadata after the first field is a misuse, not a silent no-op. */
+    {
+        const DescribeOverride ovr[1] = {{
+            &trim,
+            [](ComponentWriter& w, void*) -> bool
+            {
+                bool ok = w.Field("a", "A", 0, FieldType::F32, 0.f);
+                w.Grid(2, 6);   /* too late — must latch failure */
+                return ok && w.Ok();
+            },
+            nullptr,
+        }};
+        static char buf[8192];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, presets,
+                                  nullptr, ovr, 1),
+                 0u);
+    }
+}
+
+static void TestUseNames()
+{
+    RamFlash    flash;
+    TestComp<4> a{0x0A0A0A0Au};
+    TestComp<2> b{0x0B0B0B0Bu};
+
+    /* UseNames() before any Manage(): later registrations slot in above
+     * the name component. */
+    Presets p1{g_dummy_qspi};
+    p1.UseNames().Set("Init");
+    p1.Manage(a);
+    p1.Manage(b);
+    p1.Init(flash.Ops(), flash.Base());
+    CHECK_EQ(p1.NumManaged(), 3u);
+    CHECK(p1.ManagedAt(0) == &a);
+    CHECK(p1.ManagedAt(1) == &b);
+    CHECK(p1.ManagedAt(2)->DescribeKind() == Serializable::DescKind::Name);
+
+    /* UseNames() after Manage(): same final order, same schema hash. */
+    Presets p2{g_dummy_qspi};
+    p2.Manage(a);
+    p2.Manage(b);
+    p2.UseNames();
+    CHECK_EQ(p2.NumManaged(), 3u);
+    CHECK(p2.ManagedAt(2)->DescribeKind() == Serializable::DescKind::Name);
+    CHECK_EQ(p1.LiveSchemaHash(), p2.LiveSchemaHash());
+    CHECK_EQ(p1.LiveSize(), p2.LiveSize());
+}
+
 /* ── Golden vector emission ────────────────────────────────────────── */
 
 static std::string Hex(const uint8_t* p, size_t n)
@@ -983,6 +1216,9 @@ int main(int argc, char** argv)
     }
     TestTornWrite();
     TestDescriptorBuilder();
+    TestAutoDescribe();
+    TestAutoDescribeGenericAndOverrides();
+    TestUseNames();
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -114,6 +114,7 @@ if(CMAKE_CROSSCOMPILING)
 add_library(alchemy_host_link STATIC
     src/host_link/host_link.cpp
     src/host_link/descriptor.cpp
+    src/host_link/describe.cpp
     src/host_link/cdc_transport.cpp
 )
 add_library(alchemy::host_link ALIAS alchemy_host_link)
