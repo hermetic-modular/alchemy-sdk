@@ -217,7 +217,7 @@ Daisy Seed2 DFM pins, and together expose **SPI1**, an **I²C** bus, and
 
 ## Board versions
 
-Two Alchemy Lab board revisions are supported, selected by preset:
+V2 is the board every firmware targets:
 
 ```sh
 cmake --preset arm      # V2 (the default)

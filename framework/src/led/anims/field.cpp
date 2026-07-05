@@ -29,9 +29,11 @@ float FieldEval(const FieldDesc& desc, uint32_t unit,
         {
             if (desc.step == FieldStep::Held)
             {
+                /* Uniform means one level across the region regardless
+                 * of grain, so the hash ignores the unit. */
                 const uint32_t bucket =
                     desc.rate_ms ? (t_ms / desc.rate_ms) : 0u;
-                return Hash01(unit, bucket);
+                return Hash01(0u, bucket);
             }
             const float p = phase01 >= 0.0f
                                 ? phase01

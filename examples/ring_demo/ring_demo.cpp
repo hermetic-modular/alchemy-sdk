@@ -7,6 +7,8 @@
  *   - P1 (Rate): declarative dim Level fill for the knob value, with an
  *     Overdraw layering a comet Pip on top — position driven by the
  *     LFO's actual phase, so the comet bounces at the audible rate.
+ *     The overdraw re-draws the fill into its own frame (composition
+ *     works on frame contents, not the panel) before adding the comet.
  *   - P2 (Depth): fully custom ring (Custom).  Level fill for the knob
  *     value, a Carve pip sweeping a notch through the lit region at the
  *     LFO phase, and a Shimmer field whose amount follows the depth.
@@ -50,15 +52,21 @@ static volatile float g_lfo_phase01 = 0.0f;
 
 /* ── Ring callbacks ────────────────────────────────────────────────────── */
 
-/* Rate ring: comet layered over the declarative fill.  The saw phase is
+/* Rate ring: comet layered over the value fill.  A frame composes
+ * against its own contents — it cannot read the panel back — so the
+ * overlay re-draws the dim fill the comet adds over.  The saw phase is
  * folded by PipMotion::Bounce, so the comet ping-pongs end to end once
  * per LFO cycle. */
 static void RateOverdraw(LedPanel& panel, uint8_t pot,
-                         const ArcGeometry& geo, float /*norm*/,
-                         uint32_t /*t_ms*/, void* /*ctx*/)
+                         const ArcGeometry& geo, float norm,
+                         uint32_t t_ms, void* /*ctx*/)
 {
     RingFrame f;
     f.BeginOverlay(geo);
+
+    FillDesc fill;
+    fill.color = LedPanel::Scale(kRateColor, 0.35f);
+    f.Base(fill, norm, t_ms);
 
     PipDesc comet;
     comet.color          = kRateColor;

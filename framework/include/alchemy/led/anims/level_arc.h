@@ -83,7 +83,6 @@ inline void DrawLevelArc(LedPanel&          dst,
     FillDesc desc;
     desc.mode    = FillMode::Edge;
     desc.color   = LevelColor(level_norm, zones, low_color, mid_color, high_color);
-    desc.pivot   = 0u;
     desc.compose = FillCompose::Overlay;
     DrawFill(dst, pot_idx, start_hour, step_hours, num_steps, level_norm, desc);
 }

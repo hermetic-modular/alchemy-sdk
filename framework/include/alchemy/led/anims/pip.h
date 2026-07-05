@@ -51,9 +51,10 @@ namespace alchemy {
 enum class PipCompose : uint8_t
 {
     Replace,  ///< The pip owns its LEDs (blends over `background` if set).
-    Add,      ///< Saturating add — the pip rides on top of what is drawn.
-    Carve,    ///< Subtractive — dims what is drawn (a notch).  Composes
-              ///< against the current RingFrame contents only.
+    Add,      ///< Saturating add — rides on top of what this frame drew.
+    Carve,    ///< Subtractive — dims what this frame drew (a notch).
+              ///< Both compose against the current RingFrame contents
+              ///< only; the frame cannot read the panel back.
 };
 
 /* ── Motion mapping ─────────────────────────────────────────────────────── */

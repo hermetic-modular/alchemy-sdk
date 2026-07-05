@@ -14,8 +14,6 @@
  * unboundedly-bright rings dim when their pot is uncaught.  If null, all pots
  * render fully bright.  `Pager` is one `KnobStorage`, but any param-keyed or
  * custom storage works — the surface reads `State(ActivePage(), pot)`.
- * 
- * TODO: not a huge fan of this implementation.
  */
 
 #pragma once
@@ -63,7 +61,7 @@ class LedBinder
             return *this;
         }
         PotRef& CenterColor (LedPanel::Rgb c)   { Slot().fill.center_color   = c; return *this; }
-        PotRef& Pivot       (float p)           { Slot().fill.pivot          = p; return *this; }
+        PotRef& Pivot       (float p)           { Slot().fill.pivot01        = p; return *this; }
         PotRef& Pip         (PipStyle s)        { Slot().pip.style           = s; return *this; }
         PotRef& PipColor    (LedPanel::Rgb c)   { Slot().pip.color           = c; return *this; }
         PotRef& SnapRange   (float lo, float hi){ Slot().pip.snap_lo = lo; Slot().pip.snap_hi = hi; return *this; }

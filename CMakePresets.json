@@ -20,7 +20,7 @@
         {
             "name": "host",
             "displayName": "Host (native, libDaisy stubs)",
-            "description": "Native build of the V1 BSP + framework for CI smoke checks.",
+            "description": "Board-free native build of alchemy::primitives + unit tests.",
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build-host"
         }
@@ -33,6 +33,15 @@
         {
             "name": "host",
             "configurePreset": "host"
+        }
+    ],
+    "testPresets": [
+        {
+            "name": "host",
+            "configurePreset": "host",
+            "output": {
+                "outputOnFailure": true
+            }
         }
     ]
 }

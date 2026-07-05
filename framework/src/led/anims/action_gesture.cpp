@@ -61,14 +61,13 @@ void DrawActionGesture(LedPanel&                 dst,
         return;
 
     /* Idle: bipolar proximity cue — shows which end the pot is near. */
-    const uint8_t center_step = arc_leds / 2u;
-    const float   signed_v    = (s.stored - 0.5f) * 2.0f;
+    const float signed_v = (s.stored - 0.5f) * 2.0f;
     FillDesc idle_desc;
     idle_desc.mode         = FillMode::Center;
     idle_desc.color        = LedPanel::Scale(style.progress_color, fill_k);
     idle_desc.passive_color= LedPanel::Scale(style.progress_color, fill_k);
     idle_desc.center_color = LedPanel::Scale(style.confirm_color,  fill_k);
-    idle_desc.pivot        = center_step;
+    idle_desc.pivot01      = 0.5f;
     DrawFill(dst, pot_idx, arc_start_hour, arc_step_hours, arc_leds, signed_v, idle_desc);
 }
 

@@ -404,7 +404,7 @@ void Settings::Render(uint32_t t_ms) const
                 desc.color         = LedPanel::Scale(s.color,        k);
                 desc.passive_color = LedPanel::Scale(s.alt_color,    k);
                 desc.center_color  = LedPanel::Scale(s.center_color, k);
-                desc.pivot         = static_cast<uint8_t>(geo.arc_leds / 2u);
+                desc.pivot01       = 0.5f;
                 DrawFill(hw_->leds, p, geo, s.value, desc, t_ms);
                 DrawCatchPip(hw_->leds, p, s.pot, geo, {0xFF, 0xFF, 0xFF});
                 break;

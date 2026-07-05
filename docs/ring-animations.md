@@ -54,6 +54,10 @@ f.Emit(panel, pot, pot_state);                 // quantize, catch pip last
   `Emit` and is always on top.
 - `Begin()` owns the ring — `Emit` writes every LED. `BeginOverlay()`
   layers over an existing render — `Emit` writes only touched LEDs.
+- Composition (`Add` / `Carve` pips, Fields) works on this frame's
+  contents, not the panel — a frame cannot read pixels back. Draw the
+  layer you want modulated into the same frame; in an overlay frame,
+  `Carve` / `Field` on untouched LEDs is a no-op.
 - The panel-direct `DrawFill` / `DrawPip` / `DrawSelector` functions are
   thin wrappers over this class.
 
@@ -91,7 +95,7 @@ far".
 | `value` (call arg) | float 0..1 | the control value; both modes |
 | `mode` | `Edge` | `Edge` or `Center` |
 | `direction` | `Cw` | Edge only: which stop the fill grows from |
-| `pivot` | `0.5` | Center only: fan origin in value space; each arm normalized to its own side |
+| `pivot01` | `0.5` | Center only: fan origin in value space; each arm normalized to its own side |
 | `color` | white | fill / CW arm |
 | `neg_color` | black = same as `color` | CCW arm (Center) |
 | `passive_color` | black | unlit region (Replace compose) |
@@ -136,7 +140,7 @@ f.Pip(Region::Active, desc, pos01 /*, gain = 1, t_ms = 0 */);
 |---|---|---|
 | `pos01` (call arg) | float | position in region space; constant = landmark, signal = motion |
 | `gain` (call arg) | float 0..1 | brightness (Carve: cut depth) |
-| `compose` | `Replace` | `Replace` owns its LEDs · `Add` rides on top (saturating) · `Carve` dims what is drawn |
+| `compose` | `Replace` | `Replace` owns its LEDs · `Add` rides on top (saturating) · `Carve` dims what is drawn · Add/Carve compose against this frame only |
 | `motion` | `Direct` | `Direct` clamps · `Wrap` laps (cursor) · `Bounce` ping-pongs (comet) |
 | `color` | white | element color |
 | `width` | 1 | LEDs; >1 disables `smooth` |
@@ -209,7 +213,22 @@ of their fields:
 | `arc_snaps`, `arc_num_snaps`, `arc_color_src_pot` | `gradient.*` |
 | `pip_style`, `pip_color`, `snap_lo`, `snap_hi`, `snap_hi_color` | `pip.*` |
 
-`FillDesc.pivot` changed from a step index to the 0..1 value space; the
-Bipolar arc's value is now the control's 0..1 norm (the ±1 conversion
-lives only in the legacy `DrawFill` entry point). Code using the
-`VirtualKnob` ring styles or the binder sugar setters compiles unchanged.
+`FillDesc.pivot01` (renamed from `pivot`) changed from a step index to
+the 0..1 value space; the Bipolar arc's value is now the control's 0..1
+norm (the ±1 conversion lives only in the legacy `DrawFill` entry
+point). Code using the `VirtualKnob` ring styles or the binder sugar
+setters compiles unchanged, and `ParamSlot`'s embedded descriptors
+default to the old flattened-field values (mid-gray arc, 8 zones,
+inactive zones off), so declarative rings render as before.
+
+Intentional rendering changes vs. the pre-composition renderer:
+
+- An Edge fill's tip LED at an exact step boundary now shows
+  `passive_color` instead of black.
+- `ArcStyle::GradientFill` now honors `fill.anim` and
+  `fill.passive_color`.
+- Bipolar arms normalize per-side, so both ends are reached at the pot
+  extremes for any pivot (identical output at the default midpoint
+  pivot).
+- A declarative Selector with `num_zones == 0` blanks the ring instead
+  of leaving stale pixels.

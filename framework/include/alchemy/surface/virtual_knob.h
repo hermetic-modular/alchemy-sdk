@@ -92,7 +92,7 @@ struct Bipolar
         s.fill.color        = pos;
         s.fill.neg_color    = neg;
         s.fill.center_color = center;
-        s.fill.pivot        = pivot;
+        s.fill.pivot01      = pivot;
     }
 };
 

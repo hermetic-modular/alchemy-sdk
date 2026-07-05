@@ -16,6 +16,10 @@
  *                  would pin the indicator at one end.
  *
  * All functions are pure and allocation-free.
+ *
+ * t_ms wraps at 2^32 ms (~49.7 days of uptime).  Periods do not divide
+ * the wrap point, so phase-driven animation shows a single-frame
+ * discontinuity there — cosmetic, and not worth guarding.
  */
 
 #pragma once
@@ -33,11 +37,11 @@ inline float Phase01(uint32_t t_ms, uint32_t period_ms)
          / static_cast<float>(period_ms);
 }
 
-/** Triangle 0→1→0 over one cycle of @p phase.  Accepts any non-negative
- *  phase; fractional part is used. */
+/** Triangle 0→1→0 over one cycle of @p phase.  Any phase is accepted;
+ *  the fractional part is used. */
 inline float Tri01(float phase)
 {
-    const float x = phase - static_cast<float>(static_cast<int>(phase));
+    const float x = phase - std::floor(phase);
     return x < 0.5f ? (2.0f * x) : (2.0f - 2.0f * x);
 }
 
@@ -64,25 +68,29 @@ enum class Taper : uint8_t
 /**
  * Map @p x onto [0, 1] for display: below @p floor returns a negative
  * value (caller hides the indicator), at/above @p ceiling returns 1
- * (pegged), in between applies the taper.
+ * (pegged), in between applies the taper — continuously, rising from 0
+ * at the floor to 1 at the ceiling.
  *
- * Requires 0 < floor < ceiling.
+ * Requires 0 < floor < ceiling; violations return -1 (hidden), never
+ * NaN.
  */
 inline float NormTapered(float x, float floor_v, float ceiling_v,
                          Taper curve = Taper::Sqrt)
 {
-    if (x <= floor_v || ceiling_v <= floor_v) return -1.0f;
+    if (floor_v <= 0.0f || ceiling_v <= floor_v) return -1.0f;
+    if (x <= floor_v) return -1.0f;
     if (x >= ceiling_v) return 1.0f;
 
+    const float lin = (x - floor_v) / (ceiling_v - floor_v);
     switch (curve)
     {
         case Taper::Sqrt:
-            return std::sqrt(x / ceiling_v);
+            return std::sqrt(lin);
         case Taper::Log:
             return std::log(x / floor_v) / std::log(ceiling_v / floor_v);
         case Taper::Linear:
         default:
-            return (x - floor_v) / (ceiling_v - floor_v);
+            return lin;
     }
 }
 

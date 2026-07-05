@@ -147,7 +147,7 @@ void TestCenterFillOffsetPivot()
     d.color        = {0u, 0u, 200u};
     d.neg_color    = {200u, 0u, 0u};
     d.center_color = {50u, 50u, 50u};
-    d.pivot        = 0.667f;
+    d.pivot01      = 0.667f;
     f.Base(d, 0.0f);            /* full CCW arm */
     f.Emit(rig.panel, 0u);
 
@@ -353,6 +353,135 @@ void TestLegacyDrawPip()
     CHECK(rig.strip.r[0] == 9u);                  /* overlay: untouched */
 }
 
+/* ── Regression coverage ────────────────────────────────────────────────── */
+
+void TestCenterFillDefaultPivot()
+{
+    /* Value at the default midpoint pivot: only the pivot LED lights. */
+    Rig rig;
+    alchemy::RingFrame f;
+    f.Begin(kGeo);
+    alchemy::FillDesc d;
+    d.mode         = alchemy::FillMode::Center;
+    d.color        = {0u, 200u, 0u};
+    d.center_color = {50u, 50u, 50u};
+    f.Base(d, 0.5f);
+    f.Emit(rig.panel, 0u);
+
+    CHECK(rig.strip.g[6] == 50u);
+    for (uint8_t k = 0; k < kLeds; k++)
+        if (k != 6u) CHECK(rig.strip.g[k] == 0u);
+}
+
+void TestEmitSaturation()
+{
+    Rig rig;
+    alchemy::RingFrame f;
+    f.Begin(kGeo);
+    alchemy::FillDesc d;
+    d.color = {200u, 0u, 0u};
+    f.Base(d, 1.0f);
+
+    alchemy::PipDesc add;
+    add.compose = alchemy::PipCompose::Add;
+    add.color   = {200u, 0u, 0u};
+    f.Pip(alchemy::Region::Full, add, 0.0f);   /* LED 0 → 400 pre-quantize */
+    f.Emit(rig.panel, 0u);
+
+    CHECK(rig.strip.r[0] == 255u);              /* saturates, no wrap */
+}
+
+void TestOverlayFieldIsNoOp()
+{
+    /* A Field in an overlay frame modulates only what the frame drew —
+     * over an empty overlay it must not black out the underlying render. */
+    Rig rig;
+    rig.panel.SetRingByHour(0u, 7.5f, {9u, 9u, 9u});
+
+    alchemy::RingFrame f;
+    f.BeginOverlay(kGeo);
+    f.Field(alchemy::Region::Full, alchemy::FieldShimmer(70u), 1.0f, 35u);
+    f.Emit(rig.panel, 0u);
+
+    CHECK(rig.strip.r[0] == 9u);                /* survives */
+}
+
+void TestSelectorRegionFallbackZone()
+{
+    /* 8 Region zones cannot fit on 13 LEDs → Distributed fallback; zone
+     * selection must use the Distributed rounding rule.  value 0.12 →
+     * round(0.12·7) = zone 1 at LED round(1·12/7) = 2. */
+    Rig rig;
+    alchemy::RingFrame f;
+    f.Begin(kGeo);
+    alchemy::SelectorDesc sel;
+    sel.zone_geo     = alchemy::ZoneGeometry::Region;
+    sel.num_zones    = 8u;
+    sel.active_color = {200u, 0u, 0u};
+    f.Base(sel, 0.12f);
+    f.Emit(rig.panel, 0u);
+
+    CHECK(rig.strip.r[2] == 200u);
+    CHECK(rig.strip.r[0] == 0u);
+}
+
+void TestSelectorManyZones()
+{
+    /* Zone counts past avail_mask's 16 bits must render (zones ≥ 16
+     * unavailable) without invoking an out-of-range shift. */
+    Rig rig;
+    alchemy::RingFrame f;
+    f.Begin(kGeo);
+    alchemy::SelectorDesc sel;
+    sel.num_zones    = 40u;
+    sel.active_color = {200u, 0u, 0u};
+    sel.avail_mask   = 0x0001u;                 /* zone 0 only */
+    f.Base(sel, 0.0f);
+    f.Emit(rig.panel, 0u);
+
+    CHECK(rig.strip.r[0] == 200u);              /* zone 0 still selected */
+}
+
+void TestPipZeroWidth()
+{
+    /* width = 0 clamps to a single-LED pip. */
+    Rig rig;
+    alchemy::RingFrame f;
+    f.BeginOverlay(kGeo);
+    alchemy::PipDesc p;
+    p.color = {200u, 0u, 0u};
+    p.width = 0u;
+    f.Pip(alchemy::Region::Full, p, 0.5f);
+    f.Emit(rig.panel, 0u);
+
+    CHECK(rig.strip.r[6] == 200u);
+}
+
+void TestSignalEdgeCases()
+{
+    using alchemy::NormTapered;
+    using alchemy::Taper;
+
+    /* floor = 0 must hide, not produce NaN (Log divided by log(0)). */
+    CHECK(NormTapered(5.0f, 0.0f, 60.0f, Taper::Log) < 0.0f);
+    /* Degenerate range hides. */
+    CHECK(NormTapered(5.0f, 10.0f, 10.0f) < 0.0f);
+    /* Sqrt rises continuously from 0 at the floor. */
+    CHECK(NormTapered(50.001f, 50.0f, 60.0f, Taper::Sqrt) < 0.05f);
+    /* Negative phase is folded, not sign-mangled. */
+    const float t = alchemy::Tri01(-0.75f);
+    CHECK(t >= 0.0f && t <= 1.0f);
+    CHECK(std::fabs(t - 0.5f) < 1e-4f);
+
+    /* Uniform + Held is one level across the region, whatever the grain. */
+    alchemy::FieldDesc u;
+    u.pattern = alchemy::FieldPattern::Uniform;
+    u.grain   = alchemy::FieldGrain::PerLed;
+    u.step    = alchemy::FieldStep::Held;
+    CHECK(alchemy::FieldEval(u, 0u, 5000u, -1.0f)
+          == alchemy::FieldEval(u, 7u, 5000u, -1.0f));
+}
+
 } // namespace
 
 int main()
@@ -372,6 +501,13 @@ int main()
     TestLegacyDrawFill();
     TestLegacyDrawSelector();
     TestLegacyDrawPip();
+    TestCenterFillDefaultPivot();
+    TestEmitSaturation();
+    TestOverlayFieldIsNoOp();
+    TestSelectorRegionFallbackZone();
+    TestSelectorManyZones();
+    TestPipZeroWidth();
+    TestSignalEdgeCases();
 
     if (failures)
     {

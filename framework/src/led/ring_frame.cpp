@@ -89,6 +89,10 @@ void RingFrame::Add(uint8_t k, const LedPanel::Rgb& c, float gain)
 void RingFrame::Dim(uint8_t k, float gain)
 {
     if (k >= n_) return;
+    /* Dimming modulates frame contents.  In an overlay frame an untouched
+     * LED holds nothing — dimming it would emit black over the underlying
+     * render instead of leaving it alone, so it stays a no-op. */
+    if (overlay_ && !(touched_ & (1u << k))) return;
     const float g = Clamp01(gain);
     fr_[k] *= g;
     fg_[k] *= g;
@@ -223,9 +227,9 @@ void RingFrame::Base(const FillDesc& desc, float value01, uint32_t t_ms)
         return;
     }
 
-    /* Center: fan out from desc.pivot (0..1), each arm normalized to its
-     * own side so both reach their ends at the pot extremes. */
-    const float pivot   = Clamp01(desc.pivot);
+    /* Center: fan out from desc.pivot01 (0..1), each arm normalized to
+     * its own side so both reach their ends at the pot extremes. */
+    const float pivot   = Clamp01(desc.pivot01);
     const int   pivot_k = static_cast<int>(pivot
                               * static_cast<float>(n_ - 1u) + 0.5f);
     const int   ccw_cap = pivot_k;
@@ -342,8 +346,17 @@ inline LedPanel::Rgb ZoneColor(const SelectorDesc& desc, uint8_t z,
 void RingFrame::Base(const SelectorDesc& desc, float value01)
 {
     if (desc.num_zones == 0u) return;
+    /* Region zones too narrow for the arc fall back to Distributed
+     * layout in BaseZone; the zone must then be derived with the
+     * Distributed rounding rule or boundary values select a different
+     * zone than the one rendered. */
+    const bool region_falls_back =
+        desc.zone_geo == ZoneGeometry::Region
+        && static_cast<uint16_t>(n_) + 1u
+               < static_cast<uint16_t>(desc.num_zones) * 2u;
+
     uint8_t zone;
-    if (desc.zone_geo == ZoneGeometry::Distributed)
+    if (desc.zone_geo == ZoneGeometry::Distributed || region_falls_back)
     {
         /* Nearest-zone rounding, matching DrawSelector. */
         const float pos = Clamp01(value01)
@@ -421,6 +434,9 @@ void RingFrame::BaseZone(const SelectorDesc& desc, uint8_t zone)
     for (uint8_t k = 0u; k < n_; k++) Set(k, {0u, 0u, 0u});
     for (uint8_t z = 0u; z < desc.num_zones; z++)
     {
+        /* avail_mask has 16 bits; zones beyond it are unavailable (and a
+         * shift ≥ 16 would be undefined for zone counts > 32). */
+        if (z >= 16u) break;
         if (!(desc.avail_mask & static_cast<uint16_t>(1u << z))) continue;
         const uint8_t k = DistributedZonePosition(z, desc.num_zones, n_);
         Set(k, ZoneColor(desc, z, zone));
@@ -467,8 +483,9 @@ void RingFrame::Pip(Region region, const PipDesc& desc, float pos01,
 
     if (desc.blink_hz > 0.0f)
     {
-        const uint32_t half_ms =
-            static_cast<uint32_t>(500.0f / desc.blink_hz);
+        float half_f = 500.0f / desc.blink_hz;
+        if (half_f > 4.0e9f) half_f = 4.0e9f;   /* keep the cast defined */
+        const uint32_t half_ms = static_cast<uint32_t>(half_f);
         if (half_ms > 0u && (t_ms / half_ms) % 2u != 0u) return;
     }
 
@@ -542,8 +559,9 @@ void RingFrame::Pip(Region region, const PipDesc& desc, float pos01,
     if (center > s.last)  center = s.last;
     if (center < s.first) center = s.first;
 
-    const int first_i = center - static_cast<int>(desc.width) / 2;
-    const int last_i  = first_i + static_cast<int>(desc.width) - 1;
+    const uint8_t width   = desc.width > 0u ? desc.width : 1u;
+    const int     first_i = center - static_cast<int>(width) / 2;
+    const int     last_i  = first_i + static_cast<int>(width) - 1;
     for (int k = first_i; k <= last_i; k++)
         PaintTap(desc, s, k, gain, has_bg);
 
@@ -570,17 +588,29 @@ void RingFrame::Field(Region region, const FieldDesc& desc, float amount,
     const SpanLeds s = Resolve(region);
     if (s.first < 0) return;
 
+    /* Whole grain is one modulation level for the region — evaluate once. */
+    float whole_m = 0.0f;
+    if (desc.grain == FieldGrain::Whole)
+    {
+        whole_m = FieldEval(desc, 0u, t_ms, phase01);
+        if (desc.invert) whole_m = 1.0f - whole_m;
+    }
+
     for (int k = s.first; k <= s.last; k++)
     {
-        uint32_t unit = 0u;
-        if (desc.grain == FieldGrain::PerLed)
-            unit = static_cast<uint32_t>(k - s.first);
-        else if (desc.grain == FieldGrain::Chunk)
-            unit = static_cast<uint32_t>(k - s.first)
-                 / (desc.chunk_leds ? desc.chunk_leds : 1u);
-
-        float m = FieldEval(desc, unit, t_ms, phase01);
-        if (desc.invert) m = 1.0f - m;
+        float m;
+        if (desc.grain == FieldGrain::Whole)
+        {
+            m = whole_m;
+        }
+        else
+        {
+            uint32_t unit = static_cast<uint32_t>(k - s.first);
+            if (desc.grain == FieldGrain::Chunk)
+                unit /= (desc.chunk_leds ? desc.chunk_leds : 1u);
+            m = FieldEval(desc, unit, t_ms, phase01);
+            if (desc.invert) m = 1.0f - m;
+        }
 
         Dim(static_cast<uint8_t>(k), 1.0f - amount * m);
     }

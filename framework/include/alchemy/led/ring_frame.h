@@ -23,6 +23,11 @@
  *   - Begin() owns the ring: Emit writes every LED (doubling as the
  *     clear).  BeginOverlay() layers over an existing render: Emit
  *     writes only the LEDs this frame touched.
+ *   - Composition (Add / Carve pips, Fields) works against this frame's
+ *     contents, not the panel — the frame cannot read pixels back.  In
+ *     an overlay frame, Add over an untouched LED replaces it, and
+ *     Carve / Field on untouched LEDs is a no-op.  Draw the layer you
+ *     want modulated into the same frame.
  *
  * Regions are stamped by the Base and consumed by overlays.  All overlay
  * positions are region-relative 0..1 (0 = the region's CCW end), never
@@ -42,9 +47,10 @@
 #include "alchemy/led/anims/pip.h"
 #include "alchemy/led/anims/selector.h"
 #include "alchemy/led/anims/field.h"
-#include "alchemy/control/pot_catch.h"
 
 namespace alchemy {
+
+struct PotState;
 
 /**
  * Overlay target regions.  Stamped by the Base; a region the current
@@ -55,7 +61,7 @@ enum class Region : uint8_t
 {
     Full,       ///< The whole arc.  Always available.
     Active,     ///< The lit value region (fill / both fan arms / selected zone).
-    Passive,    ///< The complement of Active on the arc.
+    Passive,    ///< Alias of PastTip — the unlit remainder of an Edge fill.
     PastTip,    ///< From the fill tip to the CW end (Edge fills).
     ArmCw,      ///< Lit CW arm of a Center fan.
     ArmCcw,     ///< Lit CCW arm of a Center fan.
@@ -80,7 +86,7 @@ class RingFrame
 
     /**
      * Fill base.  @p value01 is the control's 0..1 norm for both modes.
-     * Center mode fans out from desc.pivot (same 0..1 space), each arm
+     * Center mode fans out from desc.pivot01 (same 0..1 space), each arm
      * normalized to its own side so both reach their ends at the pot
      * extremes.  desc.anim renders here so declarative Pulse/Ripple
      * styling needs no separate Field call.

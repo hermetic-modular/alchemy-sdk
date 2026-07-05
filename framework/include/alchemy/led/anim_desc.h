@@ -39,7 +39,7 @@ namespace alchemy {
  *             unipolar control (time, mix, depth, …).
  *  Bipolar  — fan from a pivot outward in two arms.  Use for bipolar
  *             controls (damping, attenuverter, …).  The pivot defaults
- *             to the arc midpoint; set fill.pivot to move it.
+ *             to the arc midpoint; set fill.pivot01 to move it.
  *  Selector — discrete zone indicator driven by DrawSelector().
  *  Gradient — color-morphing filled arc with snap-point markers.  Use
  *             for model-morph / waveform-select / filter-type controls
@@ -103,6 +103,28 @@ struct BottomPipDesc
     LedPanel::Rgb snap_hi_color = {0xFF, 0x00, 0x00};
 };
 
+/* Declarative-path defaults.  These match the flattened fields ParamSlot
+ * had before it embedded the descriptors (mid-gray arc, 8 zones, inactive
+ * zones dimmed to off), so binder code that sets only some fields renders
+ * exactly as it did.  The raw primitives keep their own defaults. */
+
+constexpr FillDesc SlotDefaultFill()
+{
+    FillDesc d;
+    d.color        = {0x80, 0x80, 0x80};
+    d.center_color = {0x80, 0x80, 0x80};
+    return d;
+}
+
+constexpr SelectorDesc SlotDefaultSelector()
+{
+    SelectorDesc d;
+    d.num_zones    = 8u;
+    d.active_color = {0x80, 0x80, 0x80};
+    d.inactive_dim = 0.0f;
+    return d;
+}
+
 /**
  * Per-pot arc descriptor consumed by PerfRenderer.
  *
@@ -112,10 +134,10 @@ struct BottomPipDesc
 struct ParamSlot
 {
     ArcStyle      arc_style = ArcStyle::None;
-    FillDesc      fill;      ///< Level / Bipolar / GradientFill styling.
-    SelectorDesc  selector;  ///< Selector styling.
-    GradientDesc  gradient;  ///< Gradient snap points.
-    BottomPipDesc pip;       ///< Bottom-pip styling.
+    FillDesc      fill      = SlotDefaultFill();      ///< Level / Bipolar / GradientFill styling.
+    SelectorDesc  selector  = SlotDefaultSelector();  ///< Selector styling.
+    GradientDesc  gradient;                           ///< Gradient snap points.
+    BottomPipDesc pip;                                ///< Bottom-pip styling.
 };
 
 } // namespace alchemy
