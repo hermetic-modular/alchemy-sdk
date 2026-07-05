@@ -1,5 +1,5 @@
 /**
- * clock_sync.cpp — Alchemy Lab V1 minimal MusicalClock + ClockFollower demo.
+ * clock_sync.cpp — Alchemy Lab minimal MusicalClock + ClockFollower demo.
  *
  * Reads an external Eurorack clock on CV-1 (24 PPQN), follows it with a
  * PI-PLL, and amplitude-modulates the stereo passthrough with a

@@ -1,6 +1,10 @@
 {
     "version": 3,
-    "cmakeMinimumRequired": { "major": 3, "minor": 21, "patch": 0 },
+    "cmakeMinimumRequired": {
+        "major": 3,
+        "minor": 21,
+        "patch": 0
+    },
     "configurePresets": [
         {
             "name": "arm",
@@ -9,28 +13,26 @@
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build-arm",
             "toolchainFile": "${sourceDir}/cmake/toolchains/stm32h750xx.cmake",
-            "cacheVariables": { "ALCHEMY_BOARD": "v2" }
-        },
-        {
-            "name": "arm-v1",
-            "displayName": "Alchemy Lab V1 (ARM cross-compile)",
-            "description": "Firmware build for the original V1 dev board.",
-            "inherits": "arm",
-            "binaryDir": "${sourceDir}/build-arm-v1",
-            "cacheVariables": { "ALCHEMY_BOARD": "v1" }
+            "cacheVariables": {
+                "ALCHEMY_BOARD": "v2"
+            }
         },
         {
             "name": "host",
             "displayName": "Host (native, libDaisy stubs)",
             "description": "Native build of the V1 BSP + framework for CI smoke checks.",
             "generator": "Ninja",
-            "binaryDir": "${sourceDir}/build-host",
-            "cacheVariables": { "ALCHEMY_BOARD": "v1" }
+            "binaryDir": "${sourceDir}/build-host"
         }
     ],
     "buildPresets": [
-        { "name": "arm",    "configurePreset": "arm" },
-        { "name": "arm-v1", "configurePreset": "arm-v1" },
-        { "name": "host",   "configurePreset": "host" }
+        {
+            "name": "arm",
+            "configurePreset": "arm"
+        },
+        {
+            "name": "host",
+            "configurePreset": "host"
+        }
     ]
 }

@@ -60,7 +60,11 @@ elseif(DEFINED ALCHEMY_STUB_DIR)
     target_include_directories(alchemy_primitives PUBLIC "${ALCHEMY_STUB_DIR}")
 endif()
 
-# ── alchemy::surface ───────────────────────────────────────────────────────
+# ── alchemy::surface (firmware — cross-compile only) ──────────────────────
+# Surface links a board BSP; host builds are board-free and stop at
+# alchemy::primitives + tests.
+
+if(CMAKE_CROSSCOMPILING)
 
 add_library(alchemy_surface STATIC
     src/surface/pager.cpp
@@ -90,14 +94,6 @@ if(NOT ALCHEMY_BOARD STREQUAL "v1" AND NOT ALCHEMY_BOARD STREQUAL "v2")
         "alchemy-sdk: ALCHEMY_BOARD must be 'v1' or 'v2' (got '${ALCHEMY_BOARD}').")
 endif()
 
-if(ALCHEMY_BOARD STREQUAL "v2" AND NOT CMAKE_CROSSCOMPILING)
-    message(FATAL_ERROR
-        "alchemy-sdk: ALCHEMY_BOARD=v2 requires a cross-compile build. "
-        "The V2 BSP depends on libDaisy I²C/SDMMC/FatFS types not covered "
-        "by the host stubs. Reconfigure with the ARM toolchain file or "
-        "switch to ALCHEMY_BOARD=v1 for a host build.")
-endif()
-
 target_link_libraries(alchemy_surface PUBLIC
     alchemy::primitives
     alchemy::board_alchemy_lab_${ALCHEMY_BOARD}
@@ -105,4 +101,6 @@ target_link_libraries(alchemy_surface PUBLIC
 
 if(ALCHEMY_BOARD STREQUAL "v2")
     target_compile_definitions(alchemy_surface PUBLIC ALCHEMY_BOARD_V2)
+endif()
+
 endif()

@@ -48,13 +48,20 @@ add_compile_options(
 )
 
 # ── Library layers ─────────────────────────────────────────────────────────
+# v2 is the board.  Host builds are board-free (primitives + tests only);
+# the legacy v1 BSP builds only when -DALCHEMY_BOARD=v1 is passed
+# explicitly, with a warning.
 set(ALCHEMY_BOARD "v2" CACHE STRING "Alchemy Lab board version (v1 | v2)")
 
-if(NOT CMAKE_CROSSCOMPILING OR ALCHEMY_BOARD STREQUAL "v1")
-    add_subdirectory(hardware/alchemy-lab/v1)
-endif()
-if(CMAKE_CROSSCOMPILING AND ALCHEMY_BOARD STREQUAL "v2")
-    add_subdirectory(hardware/alchemy-lab/v2)
+if(CMAKE_CROSSCOMPILING)
+    if(ALCHEMY_BOARD STREQUAL "v1")
+        message(WARNING
+            "alchemy-sdk: building for the LEGACY v1 board. A v1 binary "
+            "on v2 hardware drives wrong LED and control mappings.")
+        add_subdirectory(hardware/alchemy-lab/v1)
+    else()
+        add_subdirectory(hardware/alchemy-lab/v2)
+    endif()
 endif()
 add_subdirectory(framework)
 
@@ -64,11 +71,13 @@ if(NOT CMAKE_CROSSCOMPILING)
     add_subdirectory(tests)
 endif()
 
-# ── Examples ───────────────────────────────────────────────────────────────
-add_subdirectory(examples/stereo_eq)
-add_subdirectory(examples/kick)
-add_subdirectory(examples/clock_sync)
-add_subdirectory(examples/ring_demo)
-add_subdirectory(examples/v2_cv_demo)
-add_subdirectory(examples/v2_cal_test)
-add_subdirectory(examples/cv_playground)
+# ── Examples (firmware — cross-compile only) ──────────────────────────────
+if(CMAKE_CROSSCOMPILING)
+    add_subdirectory(examples/stereo_eq)
+    add_subdirectory(examples/kick)
+    add_subdirectory(examples/clock_sync)
+    add_subdirectory(examples/ring_demo)
+    add_subdirectory(examples/v2_cv_demo)
+    add_subdirectory(examples/v2_cal_test)
+    add_subdirectory(examples/cv_playground)
+endif()

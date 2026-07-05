@@ -1,5 +1,5 @@
 /**
- * ring_demo.cpp — Alchemy Lab V1 ring composition demo.
+ * ring_demo.cpp — Alchemy Lab ring composition demo.
  *
  * A stereo tremolo whose two rings render the LFO itself, composed from
  * the primitives in docs/ring-animations.md:

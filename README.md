@@ -221,10 +221,10 @@ Two Alchemy Lab board revisions are supported, selected by preset:
 
 ```sh
 cmake --preset arm      # V2 (the default)
-cmake --preset arm-v1   # V1
 ```
 
-(Equivalent to setting `-DALCHEMY_BOARD=v2|v1` by hand.)
+(Equivalent to setting `-DALCHEMY_BOARD=v2` by hand.  The legacy v1
+board builds only with an explicit `-DALCHEMY_BOARD=v1`, and warns.)
 
 - **v1** — original dev board. You probably don't have one of these unless you were an alpha tester.
 - **v2** — The standard production board shipped by Hermetic Modular.
