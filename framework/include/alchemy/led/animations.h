@@ -17,3 +17,6 @@
 #include "alchemy/led/anims/action_gesture.h"
 #include "alchemy/led/anims/slot_indicator.h"
 #include "alchemy/led/anims/sparkle.h"
+#include "alchemy/led/anims/field.h"
+#include "alchemy/led/ring_frame.h"
+#include "alchemy/led/signal.h"

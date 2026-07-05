@@ -57,6 +57,14 @@ enum class FillAnim : uint8_t
     Ripple,  ///< Per-LED phase-offset sine wave — organic movement.
 };
 
+/* ── Fill direction (Edge mode) ─────────────────────────────────────────── */
+
+enum class FillDirection : uint8_t
+{
+    Cw,   ///< Fill grows from the CCW stop toward CW (the default).
+    Ccw,  ///< Fill grows from the CW stop toward CCW (reverse level).
+};
+
 /* ── Compose mode ───────────────────────────────────────────────────────── */
 
 enum class FillCompose : uint8_t
@@ -77,7 +85,11 @@ enum class FillCompose : uint8_t
  *                  the default (transparent) to paint both arms in `color`.
  *   passive_color— passive region color (used in Replace compose mode).
  *   center_color — Center mode: pivot-step color (ignored by Edge).
- *   pivot        — Center: center step index (arc_leds/2 is typical).
+ *   pivot        — Center: fan origin in the control's 0..1 value space
+ *                  (0.5 = the arc midpoint).  Each arm is normalized to
+ *                  its own side, so both reach their ends at the pot
+ *                  extremes regardless of where the pivot sits.
+ *   direction    — Edge: which stop the fill grows from.
  *
  * Colors should be pre-scaled by the caller (e.g. catch-attenuation × global brightness).
  * DrawFill applies ScaleGlobal() internally before writing.
@@ -95,7 +107,8 @@ struct FillDesc
     LedPanel::Rgb neg_color     = {0u,   0u,   0u};
     LedPanel::Rgb passive_color = {0u,   0u,   0u};    ///< Passive trail (Replace mode).
     LedPanel::Rgb center_color  = {0xFF, 0xFF, 0xFF};  ///< Center pivot color (Center mode only).
-    uint8_t       pivot         = 6u;                   ///< Center step (Center mode).
+    float         pivot         = 0.5f;                 ///< Center fan origin, 0..1 value space.
+    FillDirection direction     = FillDirection::Cw;    ///< Edge growth direction.
     FillAnim      anim          = FillAnim::None;        ///< Animation on the active region.
     float         anim_depth    = 0.4f;                  ///< Modulation depth 0..1.
     FillCompose   compose       = FillCompose::Replace;  ///< Compose mode.

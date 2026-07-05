@@ -152,8 +152,23 @@ This could be used to support multiple firmwares in flash at once without requir
 
 ## Animation library
 
-The framework ships a set of declarative ring-rendering primitives in
-[`alchemy::led`](framework/include/alchemy/led/anims)
+A ring rendering is a stack — one Base showing the value, plus any number
+of overlays composed on a `RingFrame`, driven by plain floats (knob
+values, published DSP state, time phases). Two overlay primitives cover
+every animation; everything else is a parameter.
+
+| Slot | Options |
+|---|---|
+| Base (exactly 1) | `Fill/Edge` · `Fill/Center` (movable pivot) · `Selector` · `Gradient` / `GradientFill` |
+| Overlays (0..N) | `Pip` — a positioned element: cursor, comet, ping, playhead, landmark, notch, afterglow · `Field` — a brightness texture: breathe, ripple, shimmer, stutter, banding |
+| Stateful animators | `Sparkle` · `BeatPip` |
+| System | catch pip, painted by `Emit`, always on top |
+
+Declarative rings (`ParamSlot` + `PerfRenderer`) and fully custom rings
+share the same rendering core. See
+[docs/ring-animations.md](docs/ring-animations.md) for the model, the
+full parameter reference, and migration notes, and
+[`examples/ring_demo`](examples/ring_demo) for a working composition.
 
 ## Calibration
 

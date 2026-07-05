@@ -65,27 +65,34 @@ struct Level
 
     void Apply(ParamSlot& s) const
     {
-        s.arc_style      = ArcStyle::Level;
-        s.arc_color      = color;
-        s.arc_anim       = anim;
-        s.arc_alt_color  = passive_color;
-        s.arc_anim_depth = anim_depth;
+        s.arc_style          = ArcStyle::Level;
+        s.fill.color         = color;
+        s.fill.anim          = anim;
+        s.fill.passive_color = passive_color;
+        s.fill.anim_depth    = anim_depth;
     }
 };
 
 struct Bipolar
 {
     LedPanel::Rgb pos, neg, center;
+    float         pivot = 0.5f;
 
     Bipolar(LedPanel::Rgb p, LedPanel::Rgb n, LedPanel::Rgb c)
         : pos(p), neg(n), center(c) {}
 
+    /** Fan origin in the control's 0..1 value space (default: midpoint).
+     *  Each arm is normalized to its own side, so both reach their ends
+     *  at the pot extremes. */
+    Bipolar& Pivot(float p) { pivot = p; return *this; }
+
     void Apply(ParamSlot& s) const
     {
-        s.arc_style        = ArcStyle::Bipolar;
-        s.arc_color        = pos;
-        s.arc_alt_color    = neg;
-        s.arc_center_color = center;
+        s.arc_style         = ArcStyle::Bipolar;
+        s.fill.color        = pos;
+        s.fill.neg_color    = neg;
+        s.fill.center_color = center;
+        s.fill.pivot        = pivot;
     }
 };
 
@@ -101,11 +108,11 @@ struct SelectorRing
 
     void Apply(ParamSlot& s) const
     {
-        s.arc_style     = ArcStyle::Selector;
-        s.arc_color     = on;
-        s.arc_alt_color = off;
-        s.arc_num_zones = num_zones;
-        s.arc_zone_geo  = geo;
+        s.arc_style               = ArcStyle::Selector;
+        s.selector.active_color   = on;
+        s.selector.inactive_color = off;
+        s.selector.num_zones      = num_zones;
+        s.selector.zone_geo       = geo;
     }
 };
 
@@ -131,9 +138,9 @@ struct Gradient
 
     void Apply(ParamSlot& s) const
     {
-        s.arc_style     = ArcStyle::Gradient;
-        s.arc_snaps     = snaps;
-        s.arc_num_snaps = num_snaps;
+        s.arc_style          = ArcStyle::Gradient;
+        s.gradient.snaps     = snaps;
+        s.gradient.num_snaps = num_snaps;
     }
 };
 
@@ -163,11 +170,11 @@ struct GradientFill
 
     void Apply(ParamSlot& s) const
     {
-        s.arc_style         = ArcStyle::GradientFill;
-        s.arc_snaps         = snaps;
-        s.arc_num_snaps     = num_snaps;
-        s.arc_color_src_pot = src_pot;
-        s.arc_color         = fallback;
+        s.arc_style              = ArcStyle::GradientFill;
+        s.gradient.snaps         = snaps;
+        s.gradient.num_snaps     = num_snaps;
+        s.gradient.color_src_pot = src_pot;
+        s.fill.color             = fallback;
     }
 };
 
@@ -181,8 +188,8 @@ struct SolidPip
 
     void Apply(ParamSlot& s) const
     {
-        s.pip_style = PipStyle::Solid;
-        s.pip_color = color;
+        s.pip.style = PipStyle::Solid;
+        s.pip.color = color;
     }
 };
 
@@ -197,11 +204,11 @@ struct ThresholdSnapPip
 
     void Apply(ParamSlot& s) const
     {
-        s.pip_style     = PipStyle::ThresholdSnap;
-        s.pip_color     = color;
-        s.snap_lo       = lo;
-        s.snap_hi       = hi;
-        s.snap_hi_color = over_color;
+        s.pip.style         = PipStyle::ThresholdSnap;
+        s.pip.color         = color;
+        s.pip.snap_lo       = lo;
+        s.pip.snap_hi       = hi;
+        s.pip.snap_hi_color = over_color;
     }
 };
 
@@ -213,7 +220,7 @@ struct ThresholdSnapPip
  */
 struct GradientSnapPip
 {
-    void Apply(ParamSlot& s) const { s.pip_style = PipStyle::GradientSnap; }
+    void Apply(ParamSlot& s) const { s.pip.style = PipStyle::GradientSnap; }
 };
 
 /* ── Custom-ring callback ─────────────────────────────────────────────── */

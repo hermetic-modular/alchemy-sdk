@@ -29,6 +29,8 @@ add_library(alchemy_primitives STATIC
     src/led/anims/slot_indicator.cpp
     src/led/anims/sparkle.cpp
     src/led/anims/beat_pip.cpp
+    src/led/anims/field.cpp
+    src/led/ring_frame.cpp
     src/led/perf_renderer.cpp
 
     # Control primitives

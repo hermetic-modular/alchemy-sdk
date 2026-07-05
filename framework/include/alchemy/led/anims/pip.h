@@ -46,6 +46,34 @@
 
 namespace alchemy {
 
+/* ── Compose mode ───────────────────────────────────────────────────────── */
+
+enum class PipCompose : uint8_t
+{
+    Replace,  ///< The pip owns its LEDs (blends over `background` if set).
+    Add,      ///< Saturating add — the pip rides on top of what is drawn.
+    Carve,    ///< Subtractive — dims what is drawn (a notch).  Composes
+              ///< against the current RingFrame contents only.
+};
+
+/* ── Motion mapping ─────────────────────────────────────────────────────── */
+
+enum class PipMotion : uint8_t
+{
+    Direct,  ///< Position used as-is (clamped 0..1).
+    Wrap,    ///< Fractional part — a phase laps the region (cursor).
+    Bounce,  ///< Triangle-folded — a phase ping-pongs end to end (comet).
+};
+
+/* ── Trail side ─────────────────────────────────────────────────────────── */
+
+enum class PipTrailSide : uint8_t
+{
+    Both,  ///< Symmetric comet tails.
+    Ccw,   ///< Trail only toward the CCW end.
+    Cw,    ///< Trail only toward the CW end.
+};
+
 /* ── Pip descriptor ─────────────────────────────────────────────────────── */
 
 struct PipDesc
@@ -57,8 +85,16 @@ struct PipDesc
     /* Opt-in polish — all defaults preserve the original quantised behavior. */
 
     bool          smooth          = false;                ///< Sub-LED two-tap interpolation (width == 1 only).
-    float         tail_intensity  = 0.0f;                 ///< Comet-tail brightness 0..1 (smooth only); 0 = no tails.
+    float         tail_intensity  = 0.0f;                 ///< One-step comet tails, 0..1; sugar for {trail_steps = 1, trail_falloff}.
     LedPanel::Rgb background      = {0u, 0u, 0u};         ///< Dim full-arc fill; {0,0,0} = leave underlying pixels alone.
+
+    /* Composition (RingFrame path; DrawPip uses the defaults). */
+
+    PipCompose    compose         = PipCompose::Replace;  ///< How the pip lands on the frame.
+    PipMotion     motion          = PipMotion::Direct;    ///< Mapping applied to the position input.
+    uint8_t       trail_steps     = 0u;                   ///< Trail length in LEDs; 0 = none (or tail_intensity sugar).
+    float         trail_falloff   = 0.5f;                 ///< Per-LED trail decay 0..1.
+    PipTrailSide  trail_side      = PipTrailSide::Both;   ///< Which side(s) the trail extends.
 };
 
 /* ── DrawPip ────────────────────────────────────────────────────────────── */

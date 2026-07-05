@@ -58,10 +58,17 @@ if(CMAKE_CROSSCOMPILING AND ALCHEMY_BOARD STREQUAL "v2")
 endif()
 add_subdirectory(framework)
 
+# ── Tests (host only) ──────────────────────────────────────────────────────
+if(NOT CMAKE_CROSSCOMPILING)
+    enable_testing()
+    add_subdirectory(tests)
+endif()
+
 # ── Examples ───────────────────────────────────────────────────────────────
 add_subdirectory(examples/stereo_eq)
 add_subdirectory(examples/kick)
 add_subdirectory(examples/clock_sync)
+add_subdirectory(examples/ring_demo)
 add_subdirectory(examples/v2_cv_demo)
 add_subdirectory(examples/v2_cal_test)
 add_subdirectory(examples/cv_playground)
