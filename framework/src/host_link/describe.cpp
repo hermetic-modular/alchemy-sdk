@@ -76,6 +76,13 @@ bool ComponentWriter::Field(const char* id, const char* name, uint32_t off,
     return ok_;
 }
 
+bool ComponentWriter::Meta(const char* key, const char* raw_json)
+{
+    if (!Open()) return false;
+    ok_ = db_.GenericMeta(key, raw_json) && ok_;
+    return ok_;
+}
+
 bool ComponentWriter::Finalize()
 {
     if (!Open()) return false;
@@ -273,10 +280,13 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const Presets& presets,
                           const PageSet* pages,
                           const DescribeOverride* overrides,
-                          uint8_t num_overrides)
+                          uint8_t num_overrides,
+                          const VirtualButton* buttons,
+                          uint8_t num_buttons)
 {
     DescriptorBuilder db(buf, cap, presets);
     bool ok = db.Begin(info);
+    if (ok) ok = db.Buttons(buttons, num_buttons);
 
     uint8_t n_opaque = 0u;
     for (uint8_t i = 0; ok && i < presets.NumManaged(); i++)

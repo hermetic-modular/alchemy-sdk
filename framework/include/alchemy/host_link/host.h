@@ -59,6 +59,7 @@ namespace alchemy {
 class ControlLoop;
 class Page;
 class Presets;
+class VirtualButton;
 
 namespace hostlink {
 
@@ -120,6 +121,16 @@ class Host : public HostService
         return *this;
     }
 
+    /**
+     * Declare the module's physical push buttons — identity, role,
+     * gestures, and (for State-role buttons) the preset fields they
+     * mutate.  Emitted as the descriptor's top-level "buttons" array
+     * (protocol §5.5).  @p buttons must outlive the link (a static
+     * or constexpr file-scope table is the intended pattern).  Pass
+     * count == 0 to omit the key entirely.
+     */
+    Host& Buttons(const VirtualButton* buttons, uint8_t count);
+
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 
     /** Bring the link up (idempotent).  Called automatically from the
@@ -171,6 +182,9 @@ class Host : public HostService
     ControlLoop* loop_                  = nullptr;
     const Page*  pages_[kMaxPageRefs]   = {};
     uint8_t      num_pages_             = 0u;
+
+    const VirtualButton* buttons_       = nullptr;
+    uint8_t              num_buttons_   = 0u;
 
     HostLink* link_    = nullptr;
     bool      started_ = false;

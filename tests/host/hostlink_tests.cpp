@@ -32,6 +32,7 @@
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
+#include "alchemy/surface/virtual_button.h"
 #include "alchemy/surface/virtual_knob.h"
 
 using namespace alchemy;
@@ -1036,6 +1037,179 @@ static void TestAutoDescribeGenericAndOverrides()
     }
 }
 
+/* ── Buttons + custom-component meta ──────────────────────────────── */
+
+static void TestButtonsEmission()
+{
+    RamFlash    flash;
+    Presets     presets{g_dummy_qspi};
+    TestComp<2> comp{0x77777777u};
+    presets.Manage(comp);
+    presets.Init(flash.Ops(), flash.Base());
+
+    using B = VirtualButton;
+    /* One of each role, plus multiple actions and controls on the
+     * state button — covers every JSON branch. */
+    static constexpr B kButtons[] = {
+        B("b1", "Pager")
+            .Role(B::Role::Modal)
+            .Action("tap", "Next Page")
+            .Action("hold+knob", "Record Lock"),
+        B("b2", "Source")
+            .Role(B::Role::State)
+            .Action("tap", "Cycle")
+            .Controls("mode.source", B::Action::Cycle)
+            .Controls("mode.sub", B::Action::Toggle),
+    };
+
+    static char buf[8192];
+    const uint32_t len = RenderDescriptor(
+        buf, sizeof buf,
+        {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
+        presets, nullptr, nullptr, 0,
+        kButtons, sizeof(kButtons) / sizeof(kButtons[0]));
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* Top-level array present, in declared order. */
+    const auto btn = json.find("\"buttons\":[");
+    CHECK(btn != std::string::npos);
+    /* Components must precede buttons — buttons is a root-level sibling
+     * emitted after "components" closes. */
+    CHECK(json.find("\"components\":") < btn);
+
+    /* Modal button: role wire-name, actions array, no controls key. */
+    CHECK(json.find("\"id\":\"b1\",\"name\":\"Pager\",\"role\":\"modal\"")
+          != std::string::npos);
+    CHECK(json.find("\"gesture\":\"tap\",\"label\":\"Next Page\"")
+          != std::string::npos);
+    CHECK(json.find("\"gesture\":\"hold+knob\",\"label\":\"Record Lock\"")
+          != std::string::npos);
+    const auto b1 = json.find("\"id\":\"b1\"");
+    const auto b2 = json.find("\"id\":\"b2\"");
+    CHECK(b1 != std::string::npos && b2 != std::string::npos && b1 < b2);
+    /* Modal button must NOT emit a controls key. */
+    CHECK(json.find("\"controls\":", b1) > b2);
+
+    /* State button: controls array with cycle/toggle action names. */
+    CHECK(json.find("\"role\":\"state\"") != std::string::npos);
+    CHECK(json.find("\"field\":\"mode.source\",\"action\":\"cycle\"")
+          != std::string::npos);
+    CHECK(json.find("\"field\":\"mode.sub\",\"action\":\"toggle\"")
+          != std::string::npos);
+
+    /* Passing count == 0 must omit the key entirely. */
+    static char buf2[8192];
+    const uint32_t len2 = RenderDescriptor(
+        buf2, sizeof buf2,
+        {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
+        presets, nullptr, nullptr, 0, kButtons, 0);
+    CHECK(len2 > 0u);
+    CHECK(std::string(buf2, len2).find("\"buttons\"") == std::string::npos);
+
+    /* count > 0 with a null pointer is a misuse — descriptor fails. */
+    static char buf3[8192];
+    const uint32_t len3 = RenderDescriptor(
+        buf3, sizeof buf3,
+        {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
+        presets, nullptr, nullptr, 0, nullptr, 2);
+    CHECK_EQ(len3, 0u);
+}
+
+/** Custom Serializable that emits per-kind metadata via ComponentWriter::Meta
+ *  — the pattern the ParamLock describer uses. */
+template <size_t N>
+struct MetaComp : TestComp<N>
+{
+    explicit MetaComp(uint32_t hash) : TestComp<N>(hash) {}
+
+    bool Describe(ComponentWriter& w) const override
+    {
+        w.Kind("param_locks").Label("Param Locks");
+        bool ok = w.Meta("slots", "12");
+        ok &= w.Meta("slotSize", "1031");
+        ok &= w.Meta("layout",
+                     "{\"activeOff\":0,\"lengthOff\":1,"
+                     "\"baseOff\":3,\"bufOff\":7}");
+        return ok;
+    }
+};
+
+static void TestComponentMeta()
+{
+    RamFlash    flash;
+    Presets     presets{g_dummy_qspi};
+    MetaComp<4> locks{0x8888ABCDu};
+    presets.Manage(locks);
+    presets.Init(flash.Ops(), flash.Base());
+
+    static char buf[8192];
+    const uint32_t len = RenderDescriptor(
+        buf, sizeof buf,
+        {"metamod", "Meta", "0.0.1", "gitmeta", "0.1.0", "v1"},
+        presets, nullptr, nullptr, 0);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* Meta keys land between the header and (absent) fields array. */
+    CHECK(json.find("\"kind\":\"param_locks\"") != std::string::npos);
+    CHECK(json.find("\"name\":\"Param Locks\"") != std::string::npos);
+    CHECK(json.find("\"slots\":12") != std::string::npos);
+    CHECK(json.find("\"slotSize\":1031") != std::string::npos);
+    CHECK(json.find("\"layout\":{\"activeOff\":0,\"lengthOff\":1,"
+                    "\"baseOff\":3,\"bufOff\":7}") != std::string::npos);
+    /* No fields key emitted — MetaComp writes none. */
+    CHECK(json.find("\"fields\":") == std::string::npos);
+
+    /* An empty raw_json would emit `"key":` with no value — must fail
+     * (not silently ship an invalid descriptor). */
+    struct EmptyMeta : TestComp<4>
+    {
+        EmptyMeta() : TestComp<4>(0xAAAAAAAAu) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            w.Kind("param_locks");
+            return w.Meta("slots", "");
+        }
+    };
+    {
+        RamFlash flashE;
+        Presets  presetsE{g_dummy_qspi};
+        EmptyMeta em;
+        presetsE.Manage(em);
+        presetsE.Init(flashE.Ops(), flashE.Base());
+        static char bufE[8192];
+        CHECK_EQ(RenderDescriptor(bufE, sizeof bufE,
+                                  {"m", "m", "0", "g", "s", "v1"},
+                                  presetsE, nullptr, nullptr, 0),
+                 0u);
+    }
+
+    /* Meta after a field is malformed JSON — must fail the build. */
+    struct BadOrder : TestComp<4>
+    {
+        BadOrder() : TestComp<4>(0x99999999u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            w.Kind("param_locks");
+            bool ok = w.Field("x", "X", 0, FieldType::F32, 0.f);
+            /* Post-Field meta must latch failure, not silently no-op. */
+            w.Meta("slots", "12");
+            return ok && w.Ok();
+        }
+    };
+    RamFlash flash2;
+    Presets  presets2{g_dummy_qspi};
+    BadOrder bad;
+    presets2.Manage(bad);
+    presets2.Init(flash2.Ops(), flash2.Base());
+    static char buf2[8192];
+    CHECK_EQ(RenderDescriptor(buf2, sizeof buf2,
+                              {"m", "m", "0", "g", "s", "v1"},
+                              presets2, nullptr, nullptr, 0),
+             0u);
+}
+
 static void TestUseNames()
 {
     RamFlash    flash;
@@ -1218,6 +1392,8 @@ int main(int argc, char** argv)
     TestDescriptorBuilder();
     TestAutoDescribe();
     TestAutoDescribeGenericAndOverrides();
+    TestButtonsEmission();
+    TestComponentMeta();
     TestUseNames();
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

@@ -102,6 +102,13 @@ void Host::AddPage(const Page& p)
     if (num_pages_ < kMaxPageRefs) pages_[num_pages_++] = &p;
 }
 
+Host& Host::Buttons(const VirtualButton* buttons, uint8_t count)
+{
+    buttons_     = buttons;
+    num_buttons_ = count;
+    return *this;
+}
+
 void Host::OnAttach(ControlLoop& loop) { loop_ = &loop; }
 
 void Host::Start()
@@ -174,7 +181,8 @@ void Host::Start()
             DescriptorBuilder::ModuleInfo{id_, name_, fw_, git_,
                                           ALCHEMY_SDK_VERSION, board_name},
             presets_, num_pages_ ? &set : nullptr,
-            overrides_, num_overrides_);
+            overrides_, num_overrides_,
+            buttons_, num_buttons_);
         link_->SetDescriptor(desc_buf_, len);
     }
 

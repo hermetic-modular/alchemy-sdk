@@ -39,6 +39,7 @@ namespace alchemy {
 class Page;
 class Presets;
 class Serializable;
+class VirtualButton;
 
 namespace hostlink {
 
@@ -61,16 +62,20 @@ struct PageSet
 };
 
 /**
- * Render the full descriptor into @p buf.  @p pages and @p overrides are
- * optional (pass nullptr / 0).  Returns the descriptor length, or 0 on
- * any drift, overflow, or describer failure.
+ * Render the full descriptor into @p buf.  @p pages, @p overrides, and
+ * @p buttons are optional (pass nullptr / 0).  Buttons become the
+ * top-level "buttons" array (protocol §5.5); a zero count omits the key.
+ * Returns the descriptor length, or 0 on any drift, overflow, or
+ * describer failure.
  */
 uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescriptorBuilder::ModuleInfo& info,
                           const Presets& presets,
                           const PageSet* pages,
                           const DescribeOverride* overrides,
-                          uint8_t num_overrides);
+                          uint8_t num_overrides,
+                          const VirtualButton* buttons = nullptr,
+                          uint8_t num_buttons = 0u);
 
 } // namespace hostlink
 } // namespace alchemy

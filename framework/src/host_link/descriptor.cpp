@@ -9,6 +9,7 @@
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
 #include "alchemy/surface/serializable.h"
+#include "alchemy/surface/virtual_button.h"
 
 namespace alchemy {
 namespace hostlink {
@@ -303,6 +304,26 @@ bool DescriptorBuilder::EndComponent()
     return !error_;
 }
 
+bool DescriptorBuilder::GenericMeta(const char* key, const char* raw_json)
+{
+    /* Meta lives between the header and the fields array — after the
+     * first Field the writer has already opened "fields":[…] and we
+     * cannot inject a sibling key without producing malformed JSON. */
+    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    /* Reject empty strings too — an empty raw_json emits `"<key>":`
+     * with no value, which corrupts the object (subsequent siblings
+     * come out with a leading comma).  Callers must pass a full JSON
+     * value; there is no valid empty representation. */
+    if (!key || !key[0] || !raw_json || !raw_json[0])
+    {
+        error_ = true;
+        return false;
+    }
+    w_.Key(key);
+    w_.RawValue(raw_json);
+    return !error_;
+}
+
 /* ── Settings ───────────────────────────────────────────────────────── */
 
 bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,
@@ -403,11 +424,77 @@ bool DescriptorBuilder::EndSettings()
     return !error_;
 }
 
+/* ── Buttons (top-level) ───────────────────────────────────────────── */
+
+bool DescriptorBuilder::Buttons(const VirtualButton* buttons, uint8_t count)
+{
+    if (pager_ || settings_ || generic_open_)
+    {
+        error_ = true;
+        return false;
+    }
+    /* Passing a null pointer with a nonzero count would emit dangling
+     * commas in Finish(); reject up front. */
+    if (count > 0u && !buttons) { error_ = true; return false; }
+    buttons_     = buttons;
+    num_buttons_ = count;
+    return !error_;
+}
+
+/* Emit the stashed button table as a top-level "buttons":[...] array.
+ * Called from Finish() between the components array close and the root
+ * object close.  No-op when the caller stashed nothing. */
+static void EmitButtons(JsonWriter& w,
+                        const VirtualButton* buttons, uint8_t count)
+{
+    if (count == 0u || buttons == nullptr) return;
+    w.Key("buttons");
+    w.BeginArr();
+    for (uint8_t i = 0; i < count; i++)
+    {
+        const VirtualButton& b = buttons[i];
+        w.BeginObj();
+        w.Key("id");   w.Str(b.Ident() ? b.Ident() : "");
+        w.Key("name"); w.Str(b.Name()  ? b.Name()  : "");
+        w.Key("role"); w.Str(VirtualButton::RoleName(b.RoleValue()));
+
+        if (b.NumActions() > 0u)
+        {
+            w.Key("actions");
+            w.BeginArr();
+            for (uint8_t j = 0; j < b.NumActions(); j++)
+            {
+                w.BeginObj();
+                w.Key("gesture"); w.Str(b.ActionGesture(j) ? b.ActionGesture(j) : "");
+                w.Key("label");   w.Str(b.ActionLabel  (j) ? b.ActionLabel  (j) : "");
+                w.EndObj();
+            }
+            w.EndArr();
+        }
+        if (b.NumControls() > 0u)
+        {
+            w.Key("controls");
+            w.BeginArr();
+            for (uint8_t j = 0; j < b.NumControls(); j++)
+            {
+                w.BeginObj();
+                w.Key("field");  w.Str(b.ControlField(j) ? b.ControlField(j) : "");
+                w.Key("action"); w.Str(VirtualButton::ActionName(b.ControlAction(j)));
+                w.EndObj();
+            }
+            w.EndArr();
+        }
+        w.EndObj();
+    }
+    w.EndArr();
+}
+
 /* ── Finish ─────────────────────────────────────────────────────────── */
 
 uint32_t DescriptorBuilder::Finish()
 {
     w_.EndArr();   /* components */
+    EmitButtons(w_, buttons_, num_buttons_);
     w_.EndObj();   /* root */
 
     if (error_) return 0u;

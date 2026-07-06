@@ -284,6 +284,12 @@ plain editable group labeled by the optional `name` key; its fields omit
 `page`/`pot`.  Unknown kinds **without** fields must be treated as
 opaque.
 
+Custom kinds may also emit per-kind metadata keys (e.g. `slots`,
+`slotSize`, `layout`) between the header and the `fields` array — hosts
+that recognize the kind consume them, others ignore them and fall back
+to the generic field-bearing / opaque rendering.  The `param_locks`
+kind (§5.5) is one example.
+
 ### 5.1 Auto-description
 
 Firmware built on the SDK's surface stack does not hand-write this JSON:
@@ -299,6 +305,102 @@ via `DescriptorBuilder`) remain fully supported and byte-compatible.
 Cross-field references (`maxFrom`, `curveFrom`, `layoutFrom`,
 `alt.layoutFrom`) name field ids **within the same blob**; hosts resolve them
 against current (edited) values so displays stay live during editing.
+
+### 5.2 Buttons
+
+A module may declare its physical push buttons at the descriptor root as
+a `buttons` array (adjacent to `components`).  Buttons are metadata only
+— they are neither addressable nor mutable through the wire protocol.
+Their purpose is to let the host render meaningful chips ("what does B2
+do?  what's it currently set to?") and, for state-controlling buttons,
+back-reference the preset field(s) the button mutates so the current
+value can be shown next to the button and read back consistently.
+
+```jsonc
+"buttons": [
+  { "id": "b1", "name": "Page / Lock", "role": "modal",
+    "actions": [
+      { "gesture": "tap",       "label": "Next Page" },
+      { "gesture": "hold+knob", "label": "Record Param Lock" }
+    ]
+  },
+  { "id": "b2", "name": "Osc Source", "role": "state",
+    "actions": [ { "gesture": "tap", "label": "Cycle Int / Ext / Both" } ],
+    "controls": [ { "field": "source", "action": "cycle" } ]
+  },
+  { "id": "b3", "name": "Sub", "role": "state",
+    "actions": [
+      { "gesture": "tap",  "label": "Cycle Octave −1 / −2 / −3" },
+      { "gesture": "hold", "label": "Toggle Square / Sine" }
+    ],
+    "controls": [
+      { "field": "sub.octave", "action": "cycle"  },
+      { "field": "sub.wave",   "action": "toggle" }
+    ]
+  }
+]
+```
+
+- `id` — stable identifier (hosts key on this; never rename).
+- `role` — `"modal"` (transient gestures — page advance, lock record —
+  no persistent preset relationship) or `"state"` (each press mutates
+  one or more preset fields).  Unknown roles must be shown as a plain
+  chip without control affordances.
+- `actions[]` — labeled gestures (`tap`, `hold`, `hold+knob`,
+  `double_tap`, …); `gesture` values are strings so hosts can
+  forward-tolerate new ones.
+- `controls[]` (state buttons only) — each entry names a preset field
+  by id and the mutation kind (`cycle`, `toggle`, `set`, …).  The named
+  field lives in a normal component; the button entry does not carry
+  the field's value — the host reads it via the usual blob decode.
+
+The array is optional; a module that omits it is rendered without a
+button panel.
+
+### 5.3 Parameter locks (`kind: "param_locks"`)
+
+A `param_locks` component wraps a slot-array of looping-automation
+recordings that live in the preset blob.  The component is opaque at
+the field level — locks are recorded on-device by hardware gesture, not
+edited from the host — but the descriptor exposes the per-slot layout
+so hosts can *view* the recorded envelopes and *delete* individual
+slots by zeroing their `active` byte.
+
+```jsonc
+{ "id": "locks", "kind": "param_locks",
+  "hash": 0xDEADBEEF, "size": 12372, "off": 96,
+  "name": "Param Locks",
+  "slots": 12, "slotSize": 1031, "bufLen": 256,
+  "layout": {
+    "activeOff": 0, "lengthOff": 1, "baseOff": 3, "bufOff": 7
+  }
+}
+```
+
+- `slots` — number of automation slots in this component.
+- `slotSize` — bytes per slot; `size` == `slots * slotSize`.
+- `bufLen` — envelope buffer length in f32 samples (protocol constant;
+  redundantly exposed so hosts don't have to encode it).
+- `layout.*Off` — byte offsets within one slot for the `active`
+  (u8), `length` (u16, LE), `record_base` (f32, LE), and buffer (f32
+  array, LE) fields.
+
+To render slot `i`:
+
+1. Read `blob[c.off + i*slotSize + activeOff]` — skip if zero.
+2. Read `length` (u16) at `bufOff + lengthOff` within the slot.
+3. Read `record_base` (f32) at `bufOff + baseOff`.
+4. Read `length` f32 samples starting at `bufOff + bufOff` — the y-axis
+   is the recorded normalized value; plot at unit spacing.
+
+To delete a slot: write `0` to the slot's `activeOff` byte in the blob
+and push via `SET_LIVE`.  Save-to-slot to persist.
+
+The kind is field-less on purpose: the fields path is for
+knob-shaped edits, and per-lock automation is not that.  Hosts that do
+not recognize `param_locks` must fall back to the generic no-fields
+rendering (an unnamed chip) — the schema hash still guarantees
+byte-exact round-trip.
 
 ## 6. Versioning rules
 

@@ -40,6 +40,7 @@ class Presets;
 class Pager;
 class Settings;
 class Serializable;
+class VirtualButton;
 
 namespace hostlink {
 
@@ -136,6 +137,25 @@ class DescriptorBuilder
                        const char* disp_json);
     bool EndSettings();
 
+    /* ── Buttons (top-level, optional) ──────────────────────────────
+     * A module's physical push buttons rendered as descriptor metadata
+     * alongside the component list.  The array itself is emitted in
+     * Finish() so it lands after "components" and before the root
+     * close; call this after every EndPager/EndSettings/EndComponent
+     * (and before Finish()) to stash the table.  Passing count == 0 is
+     * a no-op — the key is omitted entirely, preserving descriptor
+     * bytes on modules that expose no button metadata. */
+    bool Buttons(const VirtualButton* buttons, uint8_t count);
+
+    /* ── Generic-component raw key/value ────────────────────────────
+     * Emit `,"<key>":<raw_json>` inside the currently-open generic
+     * component, between the header (id/kind/hash/size/off) and the
+     * "fields" array.  For custom kinds that need per-kind metadata
+     * (slot count, per-lock layout, …) without abusing the fields
+     * path.  @p raw_json must be a syntactically valid JSON value
+     * (object, array, string, number, or bool). */
+    bool GenericMeta(const char* key, const char* raw_json);
+
     /** Close all structures and validate totals.  Returns descriptor
      *  length in bytes, or 0 if anything drifted or overflowed. */
     uint32_t Finish();
@@ -167,6 +187,11 @@ class DescriptorBuilder
      * slot persists nothing. */
     const Settings* settings_ = nullptr;
     int16_t         offsets_[kMaxSettingsPages][kMaxPots];
+
+    /* Buttons stashed for emission during Finish().  Pointer is
+     * non-owning — the caller keeps the array alive. */
+    const VirtualButton* buttons_     = nullptr;
+    uint8_t              num_buttons_ = 0u;
 };
 
 } // namespace hostlink

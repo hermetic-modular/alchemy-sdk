@@ -73,6 +73,18 @@ class ComponentWriter
                FieldType type, float def, const char* disp_json = nullptr,
                uint16_t zones = 0u, int16_t page = -1, int16_t pot = -1);
 
+    /**
+     * Emit `,"<key>":<raw_json>` inside the component object, between the
+     * header (id / kind / hash / size / off / optional name) and the
+     * "fields" array.  Custom kinds (e.g. "param_locks") use this for
+     * per-kind metadata that doesn't fit the pager/settings shape — slot
+     * counts, per-lock layouts, etc.  Call *before* the first Field();
+     * once the fields array is open, further meta would produce
+     * malformed JSON and this call latches the whole build to failure.
+     * @p raw_json must be a syntactically valid JSON value.
+     */
+    bool Meta(const char* key, const char* raw_json);
+
     /* ── Renderer interface ─────────────────────────────────────────── */
 
     /** Emit + close the component (renderer calls this, not describers). */
