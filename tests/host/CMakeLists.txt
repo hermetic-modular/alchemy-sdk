@@ -19,6 +19,7 @@ add_executable(hostlink_tests
     "${SDK_ROOT}/framework/src/host_link/host_link.cpp"
     "${SDK_ROOT}/framework/src/host_link/descriptor.cpp"
     "${SDK_ROOT}/framework/src/host_link/describe.cpp"
+    "${SDK_ROOT}/framework/src/host_link/json_check.cpp"
     "${SDK_ROOT}/framework/src/surface/pager.cpp"
     "${SDK_ROOT}/framework/src/surface/settings.cpp"
     "${SDK_ROOT}/framework/src/surface/presets.cpp"

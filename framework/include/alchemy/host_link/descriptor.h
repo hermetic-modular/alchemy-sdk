@@ -156,6 +156,8 @@ class DescriptorBuilder
      * (object, array, string, number, or bool). */
     bool GenericMeta(const char* key, const char* raw_json);
 
+    bool GenericMetaUInt(const char* key, uint32_t value);
+
     /** Close all structures and validate totals.  Returns descriptor
      *  length in bytes, or 0 if anything drifted or overflowed. */
     uint32_t Finish();

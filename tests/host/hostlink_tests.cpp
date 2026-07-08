@@ -24,6 +24,7 @@
 #include "alchemy/host_link/describe.h"
 #include "alchemy/host_link/descriptor.h"
 #include "alchemy/host_link/frame.h"
+#include "alchemy/host_link/json_check.h"
 #include "alchemy/host_link/host_link.h"
 #include "alchemy/host_link/wire.h"
 #include "alchemy/hw/alchemy_lab.h"
@@ -1211,6 +1212,163 @@ static void TestComponentMeta()
              0u);
 }
 
+static void TestJsonCheck()
+{
+    CHECK(ValidJsonValue("0"));
+    CHECK(ValidJsonValue("12"));
+    CHECK(ValidJsonValue("-1.5e3"));
+    CHECK(ValidJsonValue("1.25"));
+    CHECK(ValidJsonValue("\"str\""));
+    CHECK(ValidJsonValue("\"a\\\"b\\u00ff\\n\""));
+    CHECK(ValidJsonValue("true"));
+    CHECK(ValidJsonValue("false"));
+    CHECK(ValidJsonValue("null"));
+    CHECK(ValidJsonValue("{}"));
+    CHECK(ValidJsonValue("[]"));
+    CHECK(ValidJsonValue("{\"a\":1,\"b\":[1,2,{\"c\":\"d\"}],\"e\":true}"));
+    CHECK(ValidJsonValue(" { \"a\" : [ 1 , 2 ] } "));
+    CHECK(ValidJsonValue("[[[[[[[[1]]]]]]]]"));
+
+    CHECK(!ValidJsonValue(nullptr));
+    CHECK(!ValidJsonValue(""));
+    CHECK(!ValidJsonValue("zu"));
+    CHECK(!ValidJsonValue("{\"activeOff\":zu,\"lengthOff\":zu}"));
+    CHECK(!ValidJsonValue("01"));
+    CHECK(!ValidJsonValue("1."));
+    CHECK(!ValidJsonValue("-"));
+    CHECK(!ValidJsonValue("+1"));
+    CHECK(!ValidJsonValue("1e"));
+    CHECK(!ValidJsonValue("\"unterminated"));
+    CHECK(!ValidJsonValue("\"bad\\x\""));
+    CHECK(!ValidJsonValue("{\"a\":}"));
+    CHECK(!ValidJsonValue("{\"a\":1,}"));
+    CHECK(!ValidJsonValue("{a:1}"));
+    CHECK(!ValidJsonValue("{\"a\":1"));
+    CHECK(!ValidJsonValue("[1,]"));
+    CHECK(!ValidJsonValue("[1 2]"));
+    CHECK(!ValidJsonValue("{}extra"));
+    CHECK(!ValidJsonValue("12 34"));
+    CHECK(!ValidJsonValue("[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]"));
+}
+
+static void TestDescriptorJsonValidation()
+{
+    struct ZuMeta : TestComp<4>
+    {
+        ZuMeta() : TestComp<4>(0xBBBB0001u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            w.Kind("param_locks");
+            return w.Meta("slotSize", "zu");
+        }
+    };
+    {
+        RamFlash flash;
+        Presets  presets{g_dummy_qspi};
+        ZuMeta   c;
+        presets.Manage(c);
+        presets.Init(flash.Ops(), flash.Base());
+        static char buf[8192];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf,
+                                  {"m", "m", "0", "g", "s", "v1"},
+                                  presets, nullptr, nullptr, 0),
+                 0u);
+    }
+
+    struct TruncMeta : TestComp<4>
+    {
+        TruncMeta() : TestComp<4>(0xBBBB0002u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            w.Kind("param_locks");
+            return w.Meta("layout", "{\"activeOff\":0,");
+        }
+    };
+    {
+        RamFlash  flash;
+        Presets   presets{g_dummy_qspi};
+        TruncMeta c;
+        presets.Manage(c);
+        presets.Init(flash.Ops(), flash.Base());
+        static char buf[8192];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf,
+                                  {"m", "m", "0", "g", "s", "v1"},
+                                  presets, nullptr, nullptr, 0),
+                 0u);
+    }
+
+    struct TrailMeta : TestComp<4>
+    {
+        TrailMeta() : TestComp<4>(0xBBBB0003u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            w.Kind("param_locks");
+            return w.Meta("slots", "12 34");
+        }
+    };
+    {
+        RamFlash  flash;
+        Presets   presets{g_dummy_qspi};
+        TrailMeta c;
+        presets.Manage(c);
+        presets.Init(flash.Ops(), flash.Base());
+        static char buf[8192];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf,
+                                  {"m", "m", "0", "g", "s", "v1"},
+                                  presets, nullptr, nullptr, 0),
+                 0u);
+    }
+
+    struct UIntMeta : TestComp<4>
+    {
+        UIntMeta() : TestComp<4>(0xBBBB0004u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            w.Kind("param_locks");
+            bool ok = w.MetaUInt("slots", 12u);
+            ok &= w.MetaUInt("slotSize", 1031u);
+            ok &= w.MetaUInt("bufLen", 256u);
+            return ok;
+        }
+    };
+    {
+        RamFlash flash;
+        Presets  presets{g_dummy_qspi};
+        UIntMeta c;
+        presets.Manage(c);
+        presets.Init(flash.Ops(), flash.Base());
+        static char buf[8192];
+        const uint32_t len = RenderDescriptor(buf, sizeof buf,
+                                              {"m", "m", "0", "g", "s", "v1"},
+                                              presets, nullptr, nullptr, 0);
+        CHECK(len > 0u);
+        const std::string json(buf, len);
+        CHECK(json.find("\"slots\":12") != std::string::npos);
+        CHECK(json.find("\"slotSize\":1031") != std::string::npos);
+        CHECK(json.find("\"bufLen\":256") != std::string::npos);
+    }
+
+    {
+        SurfaceFixture sf;
+        static char buf[8192];
+        DescriptorBuilder db(buf, sizeof buf, sf.presets);
+        bool ok = db.Begin({"x", "x", "1", "g", "s", "v1"});
+        ok &= db.BeginPager("perf", sf.pager);
+        for (uint8_t pg = 0; pg < 3; pg++)
+            for (uint8_t p = 0; p < 6; p++)
+                ok &= db.PagerField(pg, p, "f", "F",
+                                    (pg == 0 && p == 0) ? "{\"kind\":"
+                                                        : nullptr);
+        ok &= db.EndPager();
+        ok &= db.Opaque("motion", sf.motion, "m");
+        ok &= db.BeginSettings("settings", sf.settings);
+        ok &= db.EndSettings();
+        ok &= db.Name("name", sf.name);
+        CHECK(ok);
+        CHECK_EQ(db.Finish(), 0u);
+    }
+}
+
 static void TestUseNames()
 {
     RamFlash    flash;
@@ -1491,6 +1649,8 @@ int main(int argc, char** argv)
     TestAutoDescribeGenericAndOverrides();
     TestButtonsEmission();
     TestComponentMeta();
+    TestJsonCheck();
+    TestDescriptorJsonValidation();
     TestUseNames();
     TestParamLockSerializeRoundTrip();
     TestParamLockAdvanceSplit();

@@ -85,6 +85,8 @@ class ComponentWriter
      */
     bool Meta(const char* key, const char* raw_json);
 
+    bool MetaUInt(const char* key, uint32_t value);
+
     /* ── Renderer interface ─────────────────────────────────────────── */
 
     /** Emit + close the component (renderer calls this, not describers). */

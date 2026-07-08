@@ -79,6 +79,7 @@ class JsonWriter
 
     bool   Ok()     const { return !overflow_ && depth_ == 0; }
     size_t Length() const { return len_; }
+    const char* Data() const { return buf_; }
     /** NUL-terminate (not counted in Length()); false on overflow. */
     bool Terminate()
     {

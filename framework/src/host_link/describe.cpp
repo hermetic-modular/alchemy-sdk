@@ -83,6 +83,13 @@ bool ComponentWriter::Meta(const char* key, const char* raw_json)
     return ok_;
 }
 
+bool ComponentWriter::MetaUInt(const char* key, uint32_t value)
+{
+    if (!Open()) return false;
+    ok_ = db_.GenericMetaUInt(key, value) && ok_;
+    return ok_;
+}
+
 bool ComponentWriter::Finalize()
 {
     if (!Open()) return false;

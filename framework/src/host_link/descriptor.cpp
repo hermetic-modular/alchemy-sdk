@@ -5,6 +5,7 @@
 
 #include "alchemy/host_link/descriptor.h"
 
+#include "alchemy/host_link/json_check.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
@@ -319,8 +320,22 @@ bool DescriptorBuilder::GenericMeta(const char* key, const char* raw_json)
         error_ = true;
         return false;
     }
+    if (!ValidJsonValue(raw_json))
+    {
+        error_ = true;
+        return false;
+    }
     w_.Key(key);
     w_.RawValue(raw_json);
+    return !error_;
+}
+
+bool DescriptorBuilder::GenericMetaUInt(const char* key, uint32_t value)
+{
+    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    if (!key || !key[0]) { error_ = true; return false; }
+    w_.Key(key);
+    w_.UInt(value);
     return !error_;
 }
 
@@ -501,6 +516,7 @@ uint32_t DescriptorBuilder::Finish()
     if (comp_index_ != presets_.NumManaged()) return 0u;
     if (cum_off_ != presets_.LiveSize()) return 0u;
     if (!w_.Ok()) return 0u;
+    if (!ValidJsonValue(w_.Data(), w_.Length())) return 0u;
     return static_cast<uint32_t>(w_.Length());
 }
 
