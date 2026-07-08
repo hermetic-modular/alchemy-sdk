@@ -15,8 +15,10 @@
  *   alchemy::ParamLock<12> locks(hw.buttons[0], pager);     // paged, 12 = 2 × 6
  *
  * The paged form resolves Delta(p) as `pager.Page() * pager.NumPots() + p`.
- * The unpaged form uses `p` directly.  Both advance all kSlots play heads
- * each Update() so automation on inactive pages keeps cycling.
+ * The unpaged form uses `p` directly.  Advance() moves all kSlots play
+ * heads each frame so automation on inactive pages keeps cycling; it is
+ * separate from Update() (gestures) so playback survives modes — like the
+ * Settings menu — that suspend gesture handling.
  *
  * Composition at the user's read site:
  *
@@ -73,8 +75,14 @@ class ParamLock : public Serializable, public LockSource
     }
 
     /**
-     * Process one frame: edge-detect the trigger button, run the
-     * record/disarm gesture if held, and advance every play head.
+     * Process one frame of GESTURE state: consume the trigger edges
+     * PollButtons detected and run the record/disarm gesture if held.
+     *
+     * Playback is NOT advanced here — that's Advance()'s job, split out
+     * so recorded modulation keeps running in modes (e.g. the Settings
+     * menu) that suspend gesture handling.  ControlLoop calls both;
+     * standalone users must now call Advance() every frame themselves
+     * in addition to Update().
      *
      * **Call order (paged form).**  When constructed with a `Pager&`,
      * this method calls `pager.ConsumeButton()` on the trigger's
@@ -94,6 +102,11 @@ class ParamLock : public Serializable, public LockSource
      */
     void PollButtons(uint32_t t_ms, bool gated) override;
     void Update     (const float* phys, uint32_t /*t_ms*/) override;
+
+    /** Advance every active slot's play head by one frame.  Touches no
+     *  gesture state — safe (and required) every frame, even while a
+     *  mode like Settings suspends Update(). */
+    void Advance() override;
 
     /** Modulation delta for pot @p p on the visible page (no advance). */
     float Delta(uint8_t pot) const;
@@ -141,7 +154,13 @@ class ParamLock : public Serializable, public LockSource
     /* ── Serializable ──────────────────────────────────────────────────
      * Round-trips the full SavedEntry array; identical to the existing
      * Save()/Restore() but exposed through the Serializable contract so
-     * Presets can manage this object directly.                       */
+     * Presets can manage this object directly.
+     *
+     * Staged ONE entry at a time: a SavedEntry is ~1 KiB (256-sample
+     * motion buffer), so a whole-array stack local would spike
+     * kSlots × ~1 KiB deep inside the control loop (HostLink live
+     * writes, GET_LIVE, panel save/load).  The byte stream is unchanged
+     * — same entries, same order.                                    */
 
     size_t SerializedSize() const override
     {
@@ -150,16 +169,22 @@ class ParamLock : public Serializable, public LockSource
 
     void Serialize(uint8_t* out) const override
     {
-        SavedEntry entries[kSlots];
-        mgr_.Capture(entries, kSlots, 0);
-        std::memcpy(out, entries, sizeof(entries));
+        SavedEntry e;
+        for (uint8_t i = 0; i < kSlots; i++, out += sizeof(e))
+        {
+            mgr_.Capture(&e, 1, i);
+            std::memcpy(out, &e, sizeof(e));
+        }
     }
 
     bool Deserialize(const uint8_t* in) override
     {
-        SavedEntry entries[kSlots];
-        std::memcpy(entries, in, sizeof(entries));
-        mgr_.Restore(entries, kSlots, 0);
+        SavedEntry e;
+        for (uint8_t i = 0; i < kSlots; i++, in += sizeof(e))
+        {
+            std::memcpy(&e, in, sizeof(e));
+            mgr_.Restore(&e, 1, i);
+        }
         return true;
     }
 

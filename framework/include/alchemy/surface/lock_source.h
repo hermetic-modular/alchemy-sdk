@@ -41,8 +41,21 @@ class LockSource
      */
     virtual void  PollButtons(uint32_t /*t_ms*/, bool /*gated*/) {}
 
-    /** Process one control-loop frame. Main thread only. */
+    /**
+     * Process one control-loop frame of gesture state (record/disarm).
+     * Main thread only.  Gated by ControlLoop while Settings is active —
+     * playback must NOT live here; that's Advance()'s job.
+     */
     virtual void  Update(const float* phys, uint32_t t_ms) = 0;
+
+    /**
+     * Advance playback by one frame.  Called by ControlLoop every frame,
+     * unconditionally — recorded automation keeps running while Settings
+     * owns the surface.  Touches no gesture state.
+     *
+     * Default: no-op (custom sources that advance elsewhere need nothing).
+     */
+    virtual void  Advance() {}
 
     /**
      * Paint automation-state overlay (e.g. recording/active pips) onto the

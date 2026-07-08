@@ -44,7 +44,11 @@ void ParamLock<kSlots>::Update(const float* phys, uint32_t /*t_ms*/)
 
     if (mgr_.IsButtonHeld())
         mgr_.ProcessGestures(Offset(), phys);
+}
 
+template<uint8_t kSlots>
+void ParamLock<kSlots>::Advance()
+{
     mgr_.Advance();
 }
 

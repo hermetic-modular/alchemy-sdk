@@ -29,6 +29,7 @@
 #include "alchemy/hw/alchemy_lab.h"
 #include "alchemy/surface/page.h"
 #include "alchemy/surface/pager.h"
+#include "alchemy/surface/param_lock.h"
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
@@ -1239,6 +1240,102 @@ static void TestUseNames()
     CHECK_EQ(p1.LiveSize(), p2.LiveSize());
 }
 
+/* ParamLock's Serializable path stages one ~1 KiB SavedEntry at a time
+ * (not the whole array on the stack); the byte stream must stay exactly
+ * the flat SavedEntry array Restore→Capture reproduces. */
+static void TestParamLockSerializeRoundTrip()
+{
+    struct FakeButton : IButton
+    {
+        bool  Pressed() const override { return false; }
+        bool  RisingEdge() override { return false; }
+        bool  FallingEdge() override { return false; }
+        float TimeHeldMs() const override { return 0.0f; }
+    } button;
+
+    ParamLock<4> locks(button);
+    using Entry = ParamLock<4>::SavedEntry;
+    CHECK_EQ(locks.SerializedSize(), size_t{4} * sizeof(Entry));
+
+    /* Craft an image: slots 0 and 2 active with distinct ramps (zero-
+     * padded past `length`, exactly as Capture emits), slots 1 and 3
+     * inactive (all zeros). */
+    std::vector<uint8_t> image(locks.SerializedSize(), 0u);
+    {
+        Entry e{};
+        e.active      = 1u;
+        e.length      = 5u;
+        e.record_base = 0.25f;
+        for (uint16_t j = 0; j < e.length; j++)
+            e.buf[j] = 0.01f * static_cast<float>(j + 1);
+        std::memcpy(image.data(), &e, sizeof(e));
+    }
+    {
+        Entry e{};
+        e.active      = 1u;
+        e.length      = kParamLockBufferLen; /* full motion buffer */
+        e.record_base = -1.0f;
+        for (uint16_t j = 0; j < e.length; j++)
+            e.buf[j] = (j & 1u) ? 0.5f : -0.5f;
+        std::memcpy(image.data() + 2u * sizeof(Entry), &e, sizeof(e));
+    }
+
+    CHECK(locks.Deserialize(image.data()));
+
+    std::vector<uint8_t> out(locks.SerializedSize(), 0xAAu);
+    locks.Serialize(out.data());
+    CHECK(out == image);
+}
+
+/* Playback lives in Advance(), not Update(): Update() only consumes
+ * gesture edges, so ControlLoop can keep automation running (Advance
+ * every frame) while Settings suspends the gesture path (Update). */
+static void TestParamLockAdvanceSplit()
+{
+    struct FakeButton : IButton
+    {
+        bool  Pressed() const override { return false; }
+        bool  RisingEdge() override { return false; }
+        bool  FallingEdge() override { return false; }
+        float TimeHeldMs() const override { return 0.0f; }
+    } button;
+
+    ParamLock<4> locks(button);
+    using Entry = ParamLock<4>::SavedEntry;
+
+    /* Slot 0: active 3-sample loop around record_base 0.5. */
+    std::vector<uint8_t> image(locks.SerializedSize(), 0u);
+    Entry e{};
+    e.active      = 1u;
+    e.length      = 3u;
+    e.record_base = 0.5f;
+    e.buf[0]      = 0.6f;
+    e.buf[1]      = 0.7f;
+    e.buf[2]      = 0.9f;
+    std::memcpy(image.data(), &e, sizeof(e));
+    CHECK(locks.Deserialize(image.data()));
+
+    const float phys[4] = {};
+    CHECK(locks.Delta(0) == 0.6f - 0.5f);
+
+    /* Update() with no pending edges must not move the play head. */
+    locks.Update(phys, 0u);
+    locks.Update(phys, 1u);
+    CHECK(locks.Delta(0) == 0.6f - 0.5f);
+
+    /* Advance() steps the loop — including through the LockSource base,
+     * which is how ControlLoop drives it. */
+    locks.Advance();
+    CHECK(locks.Delta(0) == 0.7f - 0.5f);
+    static_cast<LockSource&>(locks).Advance();
+    CHECK(locks.Delta(0) == 0.9f - 0.5f);
+    locks.Advance();
+    CHECK(locks.Delta(0) == 0.6f - 0.5f); /* wrapped */
+
+    /* Inactive slots are unaffected either way. */
+    CHECK(locks.Delta(1) == 0.0f);
+}
+
 /* ── Golden vector emission ────────────────────────────────────────── */
 
 static std::string Hex(const uint8_t* p, size_t n)
@@ -1395,6 +1492,8 @@ int main(int argc, char** argv)
     TestButtonsEmission();
     TestComponentMeta();
     TestUseNames();
+    TestParamLockSerializeRoundTrip();
+    TestParamLockAdvanceSplit();
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

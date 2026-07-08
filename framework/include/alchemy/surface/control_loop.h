@@ -33,9 +33,10 @@
  *        OnPoll user hook
  *   2. phys[] snapshot
  *   3. settings.Update             (always runs; B2+B3 enter gesture)
+ *      locks.Advance               (always runs; playback survives Settings)
  *   4. while !settings.IsActive():
  *        cv_source.Update          (refresh per-(page, pot) CV delta cache)
- *        locks.Update              (advance play heads; may consume B1)
+ *        locks.Update              (record/disarm gestures; may consume B1)
  *        storage.Update            (Pager: page-advance + pot-catch)
  *        OnPageChange hook
  *        OnFrame user hook

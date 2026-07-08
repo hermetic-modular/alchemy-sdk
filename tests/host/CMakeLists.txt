@@ -24,6 +24,7 @@ add_executable(hostlink_tests
     "${SDK_ROOT}/framework/src/surface/presets.cpp"
     "${SDK_ROOT}/framework/src/surface/preset_gesture_ui.cpp"
     "${SDK_ROOT}/framework/src/surface/virtual_knob.cpp"
+    "${SDK_ROOT}/framework/src/control/param_lock_manager.cpp"
     "${SDK_ROOT}/hardware/alchemy-lab/v1/src/ws2812.cpp"
     "${SDK_ROOT}/hardware/alchemy-lab/v1/src/alchemy_lab_v1.cpp"
     "${SDK_ROOT}/hardware/alchemy-lab/v1/src/alchemy_lab_v1_layout.cpp"

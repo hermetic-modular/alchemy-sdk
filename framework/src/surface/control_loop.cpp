@@ -79,12 +79,22 @@ void ControlLoop::Tick()
     if (settings_) settings_->Update(phys_, now);
     const bool in_settings = settings_ && settings_->IsActive();
 
+    /* ── Lock playback advances every frame, unconditionally: recorded
+     *    modulation must keep running while Settings owns the surface.
+     *    Only the gesture half (locks_->Update below) stands down. */
+    if (locks_) locks_->Advance();
+
     if (!in_settings)
     {
         /* ── Surface updates in canonical order: cv_source first (refreshes
          *    its delta cache from the per-frame cv[] snapshot), then locks
          *    before storage so consume-button semantics land in the same
-         *    frame as the release. */
+         *    frame as the release.
+         *
+         *    Known gap, same principle as locks: gating cv_source_->Update
+         *    here freezes the CV delta cache while Settings is active.
+         *    Splitting its refresh out of the gesture path is a separate
+         *    change — see LockSource::Advance for the pattern. */
         if (cv_source_) cv_source_->Update(cv_, now);
         if (locks_)   locks_  ->Update(phys_, now);
         if (storage_) storage_->Update(phys_, now);

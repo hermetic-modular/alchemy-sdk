@@ -9,4 +9,4 @@
 
 #pragma once
 
-#define ALCHEMY_SDK_VERSION "1.0.0-beta"
+#define ALCHEMY_SDK_VERSION "1.1.0-beta"
