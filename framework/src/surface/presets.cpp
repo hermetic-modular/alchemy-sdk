@@ -97,14 +97,15 @@ bool Presets::Save(uint8_t slot)
 
 bool Presets::Load(uint8_t slot)
 {
-    if (!HasValid(slot)) return false;
+    /* Deserialize straight from the memory-mapped record — a stack
+     * PresetBlob here is ~20 KiB, comparable to the whole DTCM stack
+     * region (same reasoning as Save's staging reuse). */
+    const PresetBlob* blob = store_.Peek(slot);
+    if (!blob) return false;
+    if (blob->schema_hash != SchemaHash()) return false;
+    if (blob->length      != ManagedSize()) return false;
 
-    PresetBlob blob{};
-    if (!store_.Load(slot, blob)) return false;
-    if (blob.schema_hash != SchemaHash()) return false;
-    if (blob.length      != ManagedSize()) return false;
-
-    const uint8_t* cursor = blob.bytes;
+    const uint8_t* cursor = blob->bytes;
     for (uint8_t i = 0; i < num_managed_; i++)
     {
         if (!managed_[i]->Deserialize(cursor)) return false;
@@ -224,14 +225,10 @@ bool Presets::EraseSlot(uint8_t slot)
 
 bool Presets::HasValid(uint8_t slot) const
 {
-    if (!store_.HasValid(slot)) return false;
-
-    /* Schema-hash gate: peek at the slot's blob and require a match.
-     * PresetStore::Load is a const method, but the in-RAM scratch we
-     * read into is a stack temporary so this is still safe. */
-    PresetBlob blob{};
-    if (!store_.Load(slot, blob)) return false;
-    return blob.schema_hash == SchemaHash();
+    /* Schema-hash gate: peek at the memory-mapped record and require a
+     * match — no ~20 KiB stack temporary (see Load). */
+    const PresetBlob* blob = store_.Peek(slot);
+    return blob != nullptr && blob->schema_hash == SchemaHash();
 }
 
 } // namespace alchemy
