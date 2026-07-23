@@ -147,6 +147,17 @@ class DescriptorBuilder
      * bytes on modules that expose no button metadata. */
     bool Buttons(const VirtualButton* buttons, uint8_t count);
 
+    /* ── Raw root fragments (top-level, optional) ───────────────────
+     * Splice a `"key":value` fragment (no surrounding braces) into the
+     * descriptor's root object — the mechanism behind optional root
+     * keys like `"storage":{"sd":true,"fsv":1}` (§5.2).  Emitted in
+     * Finish() after "buttons"; up to kMaxRootFragments; the pointer
+     * must stay valid until Finish().  Malformed fragments fail the
+     * final whole-descriptor JSON validation, never ship. */
+    bool RawRoot(const char* fragment);
+
+    static constexpr uint8_t kMaxRootFragments = 4u;
+
     /* ── Generic-component raw key/value ────────────────────────────
      * Emit `,"<key>":<raw_json>` inside the currently-open generic
      * component, between the header (id/kind/hash/size/off) and the
@@ -194,6 +205,10 @@ class DescriptorBuilder
      * non-owning — the caller keeps the array alive. */
     const VirtualButton* buttons_     = nullptr;
     uint8_t              num_buttons_ = 0u;
+
+    /* Raw root fragments stashed for emission during Finish(). */
+    const char* root_fragments_[kMaxRootFragments] = {};
+    uint8_t     num_root_fragments_                = 0u;
 };
 
 } // namespace hostlink

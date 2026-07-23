@@ -22,10 +22,21 @@
 #include <cstddef>
 #include <cstdint>
 #include "alchemy/host_link/transport.h"
+#include "alchemy/host_link/wire.h"
 #include "hid/usb.h"
 
 namespace alchemy {
 namespace hostlink {
+
+namespace detail {
+/** Smallest power of two ≥ v (ring sizing; masks need pow-2). */
+constexpr size_t CdcRingPow2(size_t v)
+{
+    size_t p = 1u;
+    while (p < v) p <<= 1u;
+    return p;
+}
+} // namespace detail
 
 class CdcUsbTransport : public IHostTransport
 {
@@ -73,9 +84,14 @@ class CdcUsbTransport : public IHostTransport
     daisy::UsbHandle*           usb_    = nullptr;
     daisy::UsbHandle::UsbPeriph periph_ = daisy::UsbHandle::FS_INTERNAL;
 
-    /* Power-of-two rings; w/r indices wrap naturally via masking. */
-    static constexpr size_t kRxRing = 2048u;
-    static constexpr size_t kTxRing = 2048u;
+    /* Power-of-two rings; w/r indices wrap naturally via masking.
+     * Sized from the wire maximum so a raised ALCHEMY_HOSTLINK_MAX_BODY
+     * (protocol §1, up to 2048) always leaves room for at least three
+     * full frames in flight — HostLink::Send drops whole frames when
+     * the TX queue is short, and §8.5 read pipelining keeps up to three
+     * responses queued. */
+    static constexpr size_t kRxRing = detail::CdcRingPow2(kMaxWire * 3u);
+    static constexpr size_t kTxRing = detail::CdcRingPow2(kMaxWire * 3u);
     static constexpr size_t kChunk  = 256u;
 
     uint8_t           rx_[kRxRing];

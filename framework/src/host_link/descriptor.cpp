@@ -439,6 +439,21 @@ bool DescriptorBuilder::EndSettings()
     return !error_;
 }
 
+/* ── Raw root fragments (top-level) ────────────────────────────────── */
+
+bool DescriptorBuilder::RawRoot(const char* fragment)
+{
+    if (pager_ || settings_ || generic_open_
+        || fragment == nullptr || fragment[0] == '\0'
+        || num_root_fragments_ >= kMaxRootFragments)
+    {
+        error_ = true;
+        return false;
+    }
+    root_fragments_[num_root_fragments_++] = fragment;
+    return true;
+}
+
 /* ── Buttons (top-level) ───────────────────────────────────────────── */
 
 bool DescriptorBuilder::Buttons(const VirtualButton* buttons, uint8_t count)
@@ -510,6 +525,8 @@ uint32_t DescriptorBuilder::Finish()
 {
     w_.EndArr();   /* components */
     EmitButtons(w_, buttons_, num_buttons_);
+    for (uint8_t i = 0u; i < num_root_fragments_; i++)
+        w_.RawValue(root_fragments_[i]);
     w_.EndObj();   /* root */
 
     if (error_) return 0u;

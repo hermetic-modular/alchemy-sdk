@@ -109,6 +109,13 @@ Host& Host::Buttons(const VirtualButton* buttons, uint8_t count)
     return *this;
 }
 
+Host& Host::Extend(IHostlinkExtension& ext)
+{
+    if (num_extensions_ < HostLink::kMaxExtensions)
+        extensions_[num_extensions_++] = &ext;
+    return *this;
+}
+
 void Host::OnAttach(ControlLoop& loop) { loop_ = &loop; }
 
 void Host::Start()
@@ -176,13 +183,24 @@ void Host::Start()
                 pages_[num_pages_++] = loop_->AttachedPage(i);
         }
         const PageSet set{pages_, num_pages_};
+
+        /* Extension advertisements → descriptor root fragments. */
+        const char* frags[HostLink::kMaxExtensions];
+        uint8_t     num_frags = 0u;
+        for (uint8_t i = 0u; i < num_extensions_; i++)
+        {
+            const char* frag = extensions_[i]->DescriptorRootJson();
+            if (frag) frags[num_frags++] = frag;
+        }
+
         const uint32_t len = RenderDescriptor(
             desc_buf_, desc_cap_,
             DescriptorBuilder::ModuleInfo{id_, name_, fw_, git_,
                                           ALCHEMY_SDK_VERSION, board_name},
             presets_, num_pages_ ? &set : nullptr,
             overrides_, num_overrides_,
-            buttons_, num_buttons_);
+            buttons_, num_buttons_,
+            num_frags ? frags : nullptr, num_frags);
         link_->SetDescriptor(desc_buf_, len);
     }
 
@@ -204,6 +222,9 @@ void Host::Start()
 
     link_->SetRebootHandler(reboot_fn_ ? reboot_fn_ : &DefaultReboot,
                             reboot_fn_ ? reboot_ctx_ : nullptr);
+
+    for (uint8_t i = 0u; i < num_extensions_; i++)
+        link_->Extend(*extensions_[i]);
 }
 
 void Host::Poll(uint32_t t_ms)

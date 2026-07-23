@@ -289,11 +289,15 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescribeOverride* overrides,
                           uint8_t num_overrides,
                           const VirtualButton* buttons,
-                          uint8_t num_buttons)
+                          uint8_t num_buttons,
+                          const char* const* root_fragments,
+                          uint8_t num_root_fragments)
 {
     DescriptorBuilder db(buf, cap, presets);
     bool ok = db.Begin(info);
     if (ok) ok = db.Buttons(buttons, num_buttons);
+    for (uint8_t i = 0u; ok && i < num_root_fragments; i++)
+        ok = db.RawRoot(root_fragments[i]);
 
     uint8_t n_opaque = 0u;
     for (uint8_t i = 0; ok && i < presets.NumManaged(); i++)

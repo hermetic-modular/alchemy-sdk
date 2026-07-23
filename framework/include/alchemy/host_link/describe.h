@@ -62,11 +62,12 @@ struct PageSet
 };
 
 /**
- * Render the full descriptor into @p buf.  @p pages, @p overrides, and
- * @p buttons are optional (pass nullptr / 0).  Buttons become the
- * top-level "buttons" array (protocol §5.5); a zero count omits the key.
- * Returns the descriptor length, or 0 on any drift, overflow, or
- * describer failure.
+ * Render the full descriptor into @p buf.  @p pages, @p overrides,
+ * @p buttons, and @p root_fragments are optional (pass nullptr / 0).
+ * Buttons become the top-level "buttons" array (protocol §5.3); root
+ * fragments are `"key":value` splices merged into the root object
+ * (§5.2, e.g. the storage advertisement).  Returns the descriptor
+ * length, or 0 on any drift, overflow, or describer failure.
  */
 uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescriptorBuilder::ModuleInfo& info,
@@ -75,7 +76,9 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescribeOverride* overrides,
                           uint8_t num_overrides,
                           const VirtualButton* buttons = nullptr,
-                          uint8_t num_buttons = 0u);
+                          uint8_t num_buttons = 0u,
+                          const char* const* root_fragments = nullptr,
+                          uint8_t num_root_fragments = 0u);
 
 } // namespace hostlink
 } // namespace alchemy

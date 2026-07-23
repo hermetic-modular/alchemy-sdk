@@ -45,6 +45,28 @@ void HostLink::SetRebootHandler(void (*fn)(uint8_t, void*), void* ctx)
     reboot_ctx_ = ctx;
 }
 
+bool HostLink::Extend(IHostlinkExtension& ext)
+{
+    if (num_extensions_ >= kMaxExtensions) return false;
+
+    const uint8_t first = ext.FirstCmd();
+    const uint8_t last  = ext.LastCmd();
+    if (first > last || last > 0x7Fu) return false;
+
+    /* Core commands live below 0x50; refuse a claim that shadows them
+     * or an earlier extension (first claim wins). */
+    if (first < 0x50u) return false;
+    for (uint8_t i = 0u; i < num_extensions_; i++)
+    {
+        if (first <= extensions_[i]->LastCmd()
+            && last >= extensions_[i]->FirstCmd())
+            return false;
+    }
+
+    extensions_[num_extensions_++] = &ext;
+    return true;
+}
+
 void HostLink::Poll(uint32_t now_ms)
 {
     transport_.Pump();
@@ -61,6 +83,10 @@ void HostLink::Poll(uint32_t now_ms)
      * future writes. */
     if (stage_open_ && (now_ms - stage_last_ms_) > kStageTimeoutMs)
         AbortStage();
+
+    /* Let extensions expire their own cursors/transfers. */
+    for (uint8_t i = 0u; i < num_extensions_; i++)
+        extensions_[i]->Tick(now_ms);
 
     /* Rate-limit command *execution* per poll, not byte *consumption*:
      * every drained byte is always fed to the parser (so nothing already
@@ -109,8 +135,24 @@ void HostLink::Handle(const ParsedFrame& f, uint32_t now_ms)
         case Cmd::LoadFromSlot:  OnLoadFromSlot(f);       break;
         case Cmd::Reboot:        OnReboot(f, now_ms);     break;
         default:
+        {
+            /* Extension command blocks (protocol §8+).  The engine owns
+             * framing; the extension writes the response body. */
+            for (uint8_t i = 0u; i < num_extensions_; i++)
+            {
+                IHostlinkExtension* e = extensions_[i];
+                if (f.type >= e->FirstCmd() && f.type <= e->LastCmd())
+                {
+                    FrameWriter w(dec_);
+                    w.Begin(f.type | kRespFlag, f.seq);
+                    e->Handle(f, w, now_ms);
+                    Send(w);
+                    return;
+                }
+            }
             RespondStatus(f, Status::Unsupported);
             break;
+        }
     }
 }
 

@@ -128,3 +128,28 @@ target_include_directories(alchemy_host_link PUBLIC
 target_link_libraries(alchemy_host_link PUBLIC alchemy::surface)
 
 endif()
+
+# ── alchemy::storage (firmware — cross-compile only) ───────────────────────
+# The SD volume service (SdCard) + the HostLink §8 filesystem block
+# (FsExtension).  Firmware that records/plays from SD without HostLink
+# links this alone; the FsExtension additionally needs alchemy::host_link.
+# Host builds exercise both through tests/host on the RAM diskio.
+
+if(CMAKE_CROSSCOMPILING)
+
+add_library(alchemy_storage STATIC
+    src/storage/sd_card.cpp
+    src/storage/fs_extension.cpp
+)
+add_library(alchemy::storage ALIAS alchemy_storage)
+
+target_include_directories(alchemy_storage PUBLIC
+    "${FRAMEWORK_INCLUDE}"
+    "${HW_INCLUDE}"
+    # FatFS headers ship with libDaisy (ffconf.h under src/sys, the core
+    # under Middlewares); the daisy target carries src/sys transitively.
+    "${CMAKE_CURRENT_SOURCE_DIR}/../vendor/libDaisy/Middlewares/Third_Party/FatFs/src"
+)
+target_link_libraries(alchemy_storage PUBLIC daisy)
+
+endif()

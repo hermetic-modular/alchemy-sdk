@@ -37,6 +37,8 @@
 #include "alchemy/surface/virtual_button.h"
 #include "alchemy/surface/virtual_knob.h"
 
+#include "fs_tests.h"
+
 using namespace alchemy;
 using namespace alchemy::hostlink;
 
@@ -1591,7 +1593,7 @@ static int EmitGolden(const char* path)
         std::vector<uint8_t> rd(7);
         rd[0] = 3u;
         WrU32(rd.data() + 1, 0u);
-        WrU16(rd.data() + 5, 498u);
+        WrU16(rd.data() + 5, static_cast<uint16_t>(kMaxBody - 14u));
         record(Cmd::ReadSlot, rd);
 
         for (size_t i = 0; i < log.size(); i++)
@@ -1600,8 +1602,13 @@ static int EmitGolden(const char* path)
                          i + 1 < log.size() ? "," : "");
     }
 
+    std::fprintf(f, "  ],\n");
+
+    /* Filesystem-block exchange (protocol §8) on the RAM-disk stack. */
+    EmitFsGolden(f);
+
     /* Real descriptor built from real surfaces (hex-encoded JSON). */
-    std::fprintf(f, "  ],\n  \"descriptor\": {\n");
+    std::fprintf(f, "  \"descriptor\": {\n");
     {
         SurfaceFixture sf;
         bool ok = false;
@@ -1654,6 +1661,8 @@ int main(int argc, char** argv)
     TestUseNames();
     TestParamLockSerializeRoundTrip();
     TestParamLockAdvanceSplit();
+
+    RunFsTests(g_checks, g_failures);
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

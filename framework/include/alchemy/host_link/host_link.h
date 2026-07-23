@@ -31,6 +31,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include "alchemy/host_link/extension.h"
 #include "alchemy/host_link/frame.h"
 #include "alchemy/host_link/transport.h"
 #include "alchemy/host_link/wire.h"
@@ -77,9 +78,20 @@ class HostLink
      *  mode: kRebootApp | kRebootBootloader.  Must not return. */
     void SetRebootHandler(void (*fn)(uint8_t mode, void* ctx), void* ctx);
 
+    /**
+     * Register an optional command-block handler (protocol extension —
+     * see extension.h).  Up to kMaxExtensions; a registration whose
+     * range overlaps core commands or an earlier extension is ignored
+     * (first claim wins).  Returns false when ignored.
+     */
+    bool Extend(IHostlinkExtension& ext);
+
     /** Pump the transport, then parse + execute pending requests.
      *  Call from the control loop (1 ms cadence recommended). */
     void Poll(uint32_t now_ms);
+
+  public:
+    static constexpr uint8_t kMaxExtensions = 4u;
 
   private:
     static constexpr uint8_t  kMaxFramesPerPoll = 8u;
@@ -141,6 +153,10 @@ class HostLink
     bool     reboot_pending_ = false;
     uint8_t  reboot_mode_    = 0u;
     uint32_t reboot_at_ms_   = 0u;
+
+    /* Registered command-block extensions (non-owning). */
+    IHostlinkExtension* extensions_[kMaxExtensions] = {};
+    uint8_t             num_extensions_             = 0u;
 };
 
 } // namespace hostlink

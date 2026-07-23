@@ -19,7 +19,18 @@ namespace alchemy {
 namespace hostlink {
 
 constexpr uint8_t  kProtoVersion = 1u;
-constexpr uint16_t kMaxBody      = 512u;
+
+/* Max request/response body bytes, announced in HELLO.  512 is the
+ * protocol default; storage-capable modules may raise it (≤ 2048) for
+ * file-transfer throughput — hosts learn the value from HELLO, which
+ * itself always fits the 512-byte minimum. */
+#ifndef ALCHEMY_HOSTLINK_MAX_BODY
+#define ALCHEMY_HOSTLINK_MAX_BODY 512
+#endif
+constexpr uint16_t kMaxBody = ALCHEMY_HOSTLINK_MAX_BODY;
+static_assert(kMaxBody >= 512u && kMaxBody <= 2048u,
+              "max_body must be 512..2048 (protocol §1)");
+
 constexpr size_t   kHeaderSize   = 6u;
 constexpr size_t   kCrcSize      = 4u;
 constexpr size_t   kMaxDecoded   = kHeaderSize + kMaxBody + kCrcSize;
@@ -39,6 +50,21 @@ enum class Cmd : uint8_t
     SaveToSlot    = 0x30,
     LoadFromSlot  = 0x31,
     Reboot        = 0x40,
+
+    /* Filesystem block (protocol §8) — optional; modules without SD
+     * storage answer UNSUPPORTED for the whole 0x50 range. */
+    FsInfo        = 0x50,
+    FsList        = 0x51,
+    FsStat        = 0x52,
+    FsOpenRead    = 0x53,
+    FsRead        = 0x54,
+    FsClose       = 0x55,
+    FsOpenWrite   = 0x56,
+    FsWrite       = 0x57,
+    FsCommit      = 0x58,
+    FsDelete      = 0x59,
+    FsMkdir       = 0x5A,
+    FsRename      = 0x5B,
 };
 
 constexpr uint8_t kRespFlag = 0x80u;
@@ -57,10 +83,41 @@ enum class Status : uint8_t
     FlashFail      = 8,
     Busy           = 9,
     FrameError     = 10,
+
+    /* Filesystem block (protocol §8). */
+    FsNoCard       = 11,
+    FsNoFile       = 12,
+    FsExists       = 13,
+    FsLocked       = 14,
+    FsFull         = 15,
+    FsIo           = 16,
 };
 
 /** BLOB_BEGIN target selecting the running (volatile) state. */
 constexpr uint8_t kTargetLive = 0xFFu;
+
+/* ── Filesystem block constants (protocol §8) ──────────────────────── */
+
+/** FS_LIST terminal cookie: no more entries. */
+constexpr uint32_t kFsListEnd = 0xFFFFFFFFu;
+
+/** Path limits (§8.1). */
+constexpr size_t kFsMaxPath    = 192u;
+constexpr size_t kFsMaxSegment = 64u;
+
+/** FS_LIST / FS_STAT entry flag bits. */
+constexpr uint8_t kFsEntryDir      = 1u << 0;
+constexpr uint8_t kFsEntryReadOnly = 1u << 1;
+constexpr uint8_t kFsEntryLocked   = 1u << 2;
+
+/** FS_OPEN_WRITE flag bits. */
+constexpr uint8_t kFsWriteOverwrite = 1u << 0;
+constexpr uint8_t kFsWriteMkdirs    = 1u << 1;
+constexpr uint8_t kFsWriteResume    = 1u << 2;
+
+/** FS_INFO flag bits. */
+constexpr uint8_t kFsInfoFreeValid = 1u << 0;
+constexpr uint8_t kFsInfoFwBusy    = 1u << 1;
 
 /** REBOOT modes. */
 constexpr uint8_t kRebootApp        = 0u;

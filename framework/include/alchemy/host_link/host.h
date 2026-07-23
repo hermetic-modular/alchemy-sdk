@@ -125,11 +125,20 @@ class Host : public HostService
      * Declare the module's physical push buttons — identity, role,
      * gestures, and (for State-role buttons) the preset fields they
      * mutate.  Emitted as the descriptor's top-level "buttons" array
-     * (protocol §5.5).  @p buttons must outlive the link (a static
+     * (protocol §5.3).  @p buttons must outlive the link (a static
      * or constexpr file-scope table is the intended pattern).  Pass
      * count == 0 to omit the key entirely.
      */
     Host& Buttons(const VirtualButton* buttons, uint8_t count);
+
+    /**
+     * Attach a protocol extension (see extension.h) — e.g. the SD
+     * filesystem block.  Registered with the engine at Start(); an
+     * extension advertising a descriptor root fragment
+     * (DescriptorRootJson) has it merged automatically.  Up to
+     * HostLink::kMaxExtensions.
+     */
+    Host& Extend(IHostlinkExtension& ext);
 
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 
@@ -185,6 +194,9 @@ class Host : public HostService
 
     const VirtualButton* buttons_       = nullptr;
     uint8_t              num_buttons_   = 0u;
+
+    IHostlinkExtension* extensions_[HostLink::kMaxExtensions] = {};
+    uint8_t             num_extensions_                       = 0u;
 
     HostLink* link_    = nullptr;
     bool      started_ = false;
