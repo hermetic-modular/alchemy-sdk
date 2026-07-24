@@ -541,15 +541,47 @@ bool Settings::Deserialize(const uint8_t* in)
                     float v;
                     std::memcpy(&v, in, sizeof(float));
                     in += sizeof(float);
+                    /* Blob passed CRC + schema gates, but a live host
+                     * push can still carry any bytes: NaN-safe clamp to
+                     * the pot-normalized range everything downstream
+                     * assumes. */
+                    if (!(v >= 0.0f)) v = 0.0f;
+                    if (v > 1.0f)     v = 1.0f;
                     s.pot.stored = v;
-                    /* Resolved logical value re-derives on the next Update. */
+                    /* Canonicalize the resolved value NOW.  Update only
+                     * re-derives it while the slot's page is active in
+                     * the menu; consumers polling Value() must see the
+                     * loaded state immediately. */
+                    switch (s.kind)
+                    {
+                        case SettingsKind::Bipolar:
+                            s.value = (v - 0.5f) * 2.0f;
+                            break;
+                        case SettingsKind::Brightness:
+                            s.value = s.range_lo + v * (s.range_hi - s.range_lo);
+                            break;
+                        default:   /* Knob */
+                            s.value = v;
+                            break;
+                    }
                     break;
                 }
                 case PersistKind::Byte:
-                    s.value_idx = in[0];
+                {
+                    uint8_t idx = in[0];
                     in += 1u;
-                    /* Resolved pot.stored re-derives on the next Update. */
+                    if (s.num_zones > 0u && idx >= s.num_zones)
+                        idx = static_cast<uint8_t>(s.num_zones - 1u);
+                    s.value_idx = idx;
+                    /* Canonicalize pot.stored to the zone centre.  The
+                     * active-page tick derives value_idx FROM pot.stored,
+                     * so leaving it stale reverts the loaded selection
+                     * the moment the page is viewed in the menu. */
+                    if (s.num_zones > 0u)
+                        s.pot.stored = (static_cast<float>(idx) + 0.5f)
+                                     / static_cast<float>(s.num_zones);
                     break;
+                }
                 default:
                     break;
             }

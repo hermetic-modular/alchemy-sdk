@@ -1629,6 +1629,77 @@ static int EmitGolden(const char* path)
     return 0;
 }
 
+/* ── Settings load canonicalization ────────────────────────────────── */
+
+/* Regression: Settings keeps two representations per slot (pot.stored
+ * and value/value_idx).  Deserialize used to fill only one half per
+ * kind and rely on the active-page Update tick to reconcile — which
+ * (a) never ran for Knob/Bipolar until the page was viewed in the
+ * menu, so loaded values were inaudible, and (b) ran in the WRONG
+ * direction for Selectors (value_idx re-derived from stale pot.stored),
+ * so viewing a page in the menu reverted the loaded selection.
+ * Deserialize must leave BOTH halves canonical, immediately. */
+static void TestSettingsLoadCanonicalization()
+{
+    SurfaceFixture sf;
+    Settings&      st = sf.settings;
+
+    /* Layout (page-major, pot order):
+     *   pg0: selector(4 zones) 1B, knob 4B; pg1: brightness 4B;
+     *   pg3: bipolar 4B — 13 bytes total. */
+    CHECK_EQ(st.SerializedSize(), size_t(13));
+
+    uint8_t blob[13];
+    blob[0] = 3u;                              /* selector: zone 3 (default 2) */
+    const float knob_v = 0.9f;                 /* knob: 0.9 (default 0.5)      */
+    const float bri_t  = 1.0f;                 /* brightness norm 1 → hi=0.35  */
+    const float bip_t  = 0.25f;                /* bipolar norm 0.25 → −0.5     */
+    std::memcpy(blob + 1, &knob_v, 4u);
+    std::memcpy(blob + 5, &bri_t,  4u);
+    std::memcpy(blob + 9, &bip_t,  4u);
+
+    CHECK(st.Deserialize(blob));
+
+    /* Loaded values must be visible through the handles IMMEDIATELY —
+     * no settings-menu visit, no Update tick required. */
+    CHECK_EQ(sf.mode.Value(), uint8_t(3));
+    CHECK(sf.knob.Value() == 0.9f);
+    CHECK(sf.bip.Value()  == -0.5f);
+    {
+        const float b = sf.bright.Value();
+        CHECK(b > 0.3499f && b < 0.3501f);
+    }
+
+    /* Selector pot side must be canonical (zone centre): the active-page
+     * tick derives value_idx FROM pot.stored, so a stale pot side is
+     * exactly the bug that reverted loaded selections in the menu. */
+    CHECK(st.StoredNormAt(0, 0) == 0.875f);    /* (3 + 0.5) / 4 */
+
+    /* Update ticks with the menu INACTIVE (pending re-arm included)
+     * must not disturb the loaded state. */
+    static const float kPhys[kNumPots] = {};
+    for (uint32_t i = 0; i < 3u; i++) st.Update(kPhys, 100u + 16u * i);
+    CHECK_EQ(sf.mode.Value(), uint8_t(3));
+    CHECK(sf.knob.Value() == 0.9f);
+    CHECK(sf.bip.Value()  == -0.5f);
+
+    /* Round-trip idempotence: serialize back → byte-identical blob. */
+    uint8_t out[13] = {};
+    st.Serialize(out);
+    CHECK(std::memcmp(out, blob, sizeof blob) == 0);
+
+    /* Hostile live-push bytes: out-of-range selector index clamps to
+     * the last zone; NaN floats land at 0 instead of poisoning the
+     * catch/render math. */
+    blob[0] = 200u;
+    const uint32_t kQnan = 0x7FC00000u;
+    std::memcpy(blob + 1, &kQnan, 4u);
+    CHECK(st.Deserialize(blob));
+    CHECK_EQ(sf.mode.Value(), uint8_t(3));     /* 4 zones → clamp to 3 */
+    CHECK(sf.knob.Value() == 0.0f);
+    CHECK(st.StoredNormAt(0, 1) == 0.0f);
+}
+
 /* ── Main ──────────────────────────────────────────────────────────── */
 
 int main(int argc, char** argv)
@@ -1661,6 +1732,7 @@ int main(int argc, char** argv)
     TestUseNames();
     TestParamLockSerializeRoundTrip();
     TestParamLockAdvanceSplit();
+    TestSettingsLoadCanonicalization();
 
     RunFsTests(g_checks, g_failures);
 
