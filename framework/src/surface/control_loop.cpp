@@ -82,7 +82,11 @@ void ControlLoop::Tick()
     /* ── Lock playback advances every frame, unconditionally: recorded
      *    modulation must keep running while Settings owns the surface.
      *    Only the gesture half (locks_->Update below) stands down. */
-    if (locks_) locks_->Advance();
+    if (locks_)
+    {
+        locks_->SetFrameMs(frame_ms_);
+        locks_->Advance();
+    }
 
     if (!in_settings)
     {

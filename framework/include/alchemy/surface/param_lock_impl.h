@@ -5,13 +5,40 @@
 
 #pragma once
 
+#include <cstring>
+
 #include "alchemy/surface/param_lock.h"
 #include "alchemy/led/panel.h"
 
 namespace alchemy {
 
-template<uint8_t kSlots>
-void ParamLock<kSlots>::PollButtons(uint32_t /*t_ms*/, bool gated)
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::Save(uint8_t* out) const
+{
+    /* An inert surface (external arena refused) still owes the caller a
+     * full, well-formed image: SerializedSize() promised kSavedBytes, and
+     * the manager — which has no stride to work from — would write only
+     * the 5-byte headers, leaving the caller's buffer uninitialised in
+     * the gaps and putting stack residue into a preset slot. */
+    if (!mgr_.IsReady())
+    {
+        std::memset(out, 0, kSavedBytes);
+        return;
+    }
+
+    for (uint8_t i = 0; i < kSlots; i++, out += kBytesPerSavedSlot)
+        mgr_.CaptureSlot(i, out);
+}
+
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::Restore(const uint8_t* in)
+{
+    for (uint8_t i = 0; i < kSlots; i++, in += kBytesPerSavedSlot)
+        mgr_.RestoreSlot(i, in);
+}
+
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::PollButtons(uint32_t /*t_ms*/, bool gated)
 {
     const bool pressed = trigger_->Pressed();
     const bool rising  = pressed && !prev_pressed_;
@@ -22,8 +49,8 @@ void ParamLock<kSlots>::PollButtons(uint32_t /*t_ms*/, bool gated)
     if (falling) falling_pending_ = true;
 }
 
-template<uint8_t kSlots>
-void ParamLock<kSlots>::Update(const float* phys, uint32_t /*t_ms*/)
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::Update(const float* phys, uint32_t /*t_ms*/)
 {
     /* Apply edges detected by PollButtons. Rising is processed first so a
      * fast tap (both flags set in the same frame) sees OnButtonDown before
@@ -46,50 +73,50 @@ void ParamLock<kSlots>::Update(const float* phys, uint32_t /*t_ms*/)
         mgr_.ProcessGestures(Offset(), phys);
 }
 
-template<uint8_t kSlots>
-void ParamLock<kSlots>::Advance()
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::Advance()
 {
     mgr_.Advance();
 }
 
-template<uint8_t kSlots>
-float ParamLock<kSlots>::Delta(uint8_t pot) const
+template<uint8_t kSlots, class Len>
+float ParamLock<kSlots, Len>::Delta(uint8_t pot) const
 {
     return mgr_.Read(static_cast<uint8_t>(Offset() + pot));
 }
 
-template<uint8_t kSlots>
-bool ParamLock<kSlots>::IsActive(uint8_t pot) const
+template<uint8_t kSlots, class Len>
+bool ParamLock<kSlots, Len>::IsActive(uint8_t pot) const
 {
     return mgr_.IsActive(static_cast<uint8_t>(Offset() + pot));
 }
 
-template<uint8_t kSlots>
-bool ParamLock<kSlots>::IsRecording(uint8_t pot) const
+template<uint8_t kSlots, class Len>
+bool ParamLock<kSlots, Len>::IsRecording(uint8_t pot) const
 {
     return mgr_.IsRecording(static_cast<uint8_t>(Offset() + pot));
 }
 
-template<uint8_t kSlots>
-float ParamLock<kSlots>::DeltaAtPage(uint8_t page, uint8_t pot) const
+template<uint8_t kSlots, class Len>
+float ParamLock<kSlots, Len>::DeltaAtPage(uint8_t page, uint8_t pot) const
 {
     return mgr_.Read(static_cast<uint8_t>(page * Width() + pot));
 }
 
-template<uint8_t kSlots>
-bool ParamLock<kSlots>::IsActiveAtPage(uint8_t page, uint8_t pot) const
+template<uint8_t kSlots, class Len>
+bool ParamLock<kSlots, Len>::IsActiveAtPage(uint8_t page, uint8_t pot) const
 {
     return mgr_.IsActive(static_cast<uint8_t>(page * Width() + pot));
 }
 
-template<uint8_t kSlots>
-bool ParamLock<kSlots>::IsRecordingAtPage(uint8_t page, uint8_t pot) const
+template<uint8_t kSlots, class Len>
+bool ParamLock<kSlots, Len>::IsRecordingAtPage(uint8_t page, uint8_t pot) const
 {
     return mgr_.IsRecording(static_cast<uint8_t>(page * Width() + pot));
 }
 
-template<uint8_t kSlots>
-bool ParamLock<kSlots>::AnyRecording() const
+template<uint8_t kSlots, class Len>
+bool ParamLock<kSlots, Len>::AnyRecording() const
 {
     const uint8_t off = Offset();
     const uint8_t w   = Width();
@@ -98,8 +125,8 @@ bool ParamLock<kSlots>::AnyRecording() const
     return false;
 }
 
-template<uint8_t kSlots>
-bool ParamLock<kSlots>::AnyActive() const
+template<uint8_t kSlots, class Len>
+bool ParamLock<kSlots, Len>::AnyActive() const
 {
     const uint8_t off = Offset();
     const uint8_t w   = Width();
@@ -108,8 +135,8 @@ bool ParamLock<kSlots>::AnyActive() const
     return false;
 }
 
-template<uint8_t kSlots>
-void ParamLock<kSlots>::Render(LedPanel& panel, uint32_t /*t_ms*/) const
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::Render(LedPanel& panel, uint32_t /*t_ms*/) const
 {
     const uint8_t off = Offset();
     const uint8_t w   = Width();

@@ -77,7 +77,10 @@ What the example demonstrates:
   paint its red-recording / green-active pips on top.
 - **ParamLock without a Pager.**  `ParamLock<6>` in its unpaged form
   records six independent loops — one per pot — that are layered into the
-  pot reads at a single composition site (`Knob()`).
+  pot reads at a single composition site (`Knob()`).  Loop length is the
+  optional second template argument (`ParamLock<6, LockLength<20>>` for
+  twenty seconds); see [docs/param-locks.md](../docs/param-locks.md) for
+  what a longer one costs.
 
 Only `ParamLock` and `LedRender` are linked — `Pager`, `Settings`,
 `Presets`, and `CvRouter` are not in the binary, because a single-page
