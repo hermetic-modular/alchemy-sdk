@@ -5,17 +5,17 @@ project(AlchemySDK LANGUAGES CXX C ASM)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 # ── Cross-compile branch: bring in libDaisy and the daisy_executable helper
 if(CMAKE_CROSSCOMPILING)
     message(STATUS "alchemy-sdk: cross-compile build (target: Daisy Seed2 DFM, QSPI bootloader)")
 
-    if(NOT EXISTS "${CMAKE_SOURCE_DIR}/vendor/libDaisy/CMakeLists.txt")
+    if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/vendor/libDaisy/CMakeLists.txt")
         message(FATAL_ERROR
             "alchemy-sdk: vendor/libDaisy is not initialised.  Run:\n"
             "    git submodule update --init --recursive\n"
-            "from ${CMAKE_SOURCE_DIR}")
+            "from ${CMAKE_CURRENT_SOURCE_DIR}")
     endif()
 
     add_subdirectory(vendor/libDaisy EXCLUDE_FROM_ALL)
@@ -35,7 +35,7 @@ if(CMAKE_CROSSCOMPILING)
 
 # ── Host branch: inject the libDaisy stubs so headers resolve ──────────────
 else()
-    set(ALCHEMY_STUB_DIR "${CMAKE_SOURCE_DIR}/stubs")
+    set(ALCHEMY_STUB_DIR "${CMAKE_CURRENT_SOURCE_DIR}/stubs")
     message(STATUS "alchemy-sdk: host build — using libDaisy stubs from ${ALCHEMY_STUB_DIR}")
 endif()
 
