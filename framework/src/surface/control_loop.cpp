@@ -5,6 +5,7 @@
 
 #include "alchemy/surface/control_loop.h"
 #include "alchemy/hw/alchemy_lab.h"
+#include "alchemy/surface/button_bank.h"
 #include "alchemy/surface/settings.h"
 #include "daisy_seed.h"
 
@@ -16,6 +17,15 @@ ControlLoop::ControlLoop(AlchemyLab& hw, uint32_t frame_ms, uint32_t poll_ms)
       poll_ms_(poll_ms ? poll_ms : 1u),
       renderer_(hw.Arc())
 {
+}
+
+ControlLoop& ControlLoop::Use(ButtonBank& bank)
+{
+    buttons_ = &bank;
+    for (uint8_t i = 0; i < kNumButtons; i++) btn_refs_[i] = &hw_->buttons[i];
+    bank.Attach(btn_refs_, kNumButtons);
+    bank.AttachPageSource(this);
+    return *this;
 }
 
 void ControlLoop::WireKnobs()
@@ -41,6 +51,7 @@ void ControlLoop::Tick()
      * — just three pointer assigns per knob — and removes a class of bugs
      * where a knob moves between pages but the loop still has stale refs. */
     WireKnobs();
+    if (buttons_) buttons_->AttachStorage(storage_);
 
     const uint32_t now = daisy::System::GetNow();
 
@@ -64,6 +75,9 @@ void ControlLoop::Tick()
         const bool gated = settings_ && settings_->IsActive();
         if (cv_source_) cv_source_->PollEdges(cv_, daisy::System::GetUs(), gated);
         if (locks_)   locks_  ->PollButtons(t_ms, gated);
+        if (buttons_)
+            buttons_->PollButtons(t_ms, gated,
+                                  storage_ ? storage_->ActivePage() : 0u);
         if (storage_) storage_->PollButtons(t_ms, gated);
         if (host_service_) host_service_->Poll(t_ms);
         if (on_poll_) on_poll_(t_ms);
@@ -87,6 +101,11 @@ void ControlLoop::Tick()
         locks_->SetFrameMs(frame_ms_);
         locks_->Advance();
     }
+
+    /* Deferred button-change callbacks run every frame, unconditionally:
+     * a host preset push must reach the app's Bind targets even while
+     * Settings owns the surface (data application is not a gesture). */
+    if (buttons_) buttons_->Update(now);
 
     if (!in_settings)
     {
@@ -197,6 +216,12 @@ void ControlLoop::Render(uint32_t t_ms)
             if (c.r || c.g || c.b) hw_->leds.SetButtonPair(0, c);
         }
     }
+
+    /* Button-state colors paint after the page indicator: a declared
+     * mode color deliberately wins over the page tint. */
+    if (buttons_)
+        buttons_->Render(hw_->leds,
+                         storage_ ? storage_->ActivePage() : 0u, t_ms);
 
     /* Global OnRender hook fires before the LockSource overlay so the
      * overlay always sits on top of anything the user paints. */

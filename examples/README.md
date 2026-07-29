@@ -112,6 +112,15 @@ reports "no descriptor" instead of shipping a wrong one.  Transport
 SDK defaults with fluent overrides; host commands run inside
 `ControlLoop`'s 1 ms poll, the same thread as panel gestures.
 
+Buttons ride the same declarations: a `VirtualButton` on page Alpha
+cycles the output routing (Stereo / Swapped / Mono) from B3, and the
+`ButtonBank` it lives in persists the zone in presets, paints the
+button LEDs per zone, and lands it in the browser as an editable enum
+inside the Alpha page — one declaration, no hand-written
+`Serializable`.  Page Beta reuses the same physical B3 for a phase
+toggle: one declaration per page, each with its own preset byte (see
+[docs/buttons.md](../docs/buttons.md)).
+
 The example also shows the extension points: a custom `Serializable`
 (`OutTrim`) that becomes editable in the browser by overriding
 `Describe(ComponentWriter&)`, and — when you outgrow derivation —

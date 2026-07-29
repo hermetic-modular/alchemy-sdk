@@ -37,6 +37,7 @@
 #include "alchemy/surface/virtual_button.h"
 #include "alchemy/surface/virtual_knob.h"
 
+#include "button_tests.h"
 #include "fs_tests.h"
 #include "param_lock_tests.h"
 
@@ -1638,6 +1639,7 @@ int main(int argc, char** argv)
     TestSettingsLoadCanonicalization();
 
     RunParamLockTests(g_checks, g_failures);
+    RunButtonTests(g_checks, g_failures);
     RunFsTests(g_checks, g_failures);
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

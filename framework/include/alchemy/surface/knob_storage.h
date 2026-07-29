@@ -30,6 +30,8 @@
 
 namespace alchemy {
 
+class IButton;
+
 class KnobStorage
 {
   public:
@@ -78,6 +80,17 @@ class KnobStorage
      * button when this is the active page. Default: black (no indicator).
      */
     virtual LedPanel::Rgb PageColor(uint8_t /*page*/) const { return {0, 0, 0}; }
+
+    /**
+     * The physical button this storage's page-advance gesture consumes,
+     * or nullptr when it has none.  Surfaces that claim a gesture on the
+     * same button (ParamLock, ButtonBank) compare against this and call
+     * ConsumeButton() so the same release doesn't also advance the page.
+     */
+    virtual const IButton* PageButton() const { return nullptr; }
+
+    /** Suppress the next page-advance release (no-op by default). */
+    virtual void ConsumeButton() {}
 };
 
 } // namespace alchemy

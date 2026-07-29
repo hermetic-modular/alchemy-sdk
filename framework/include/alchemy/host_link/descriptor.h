@@ -88,6 +88,14 @@ class DescriptorBuilder
      *  returns 0 rather than reading @p field_ids out of bounds. */
     bool PagerAltMap(const char* layout_from, const char* const* field_ids,
                      size_t count);
+
+    template <size_t N>
+    bool PagerAltMap(const char* layout_from,
+                     const char* const (&field_ids)[N])
+    {
+        return PagerAltMap(layout_from, field_ids, N);
+    }
+
     bool EndPager();
 
     /* ── Opaque component (round-trips byte-exact) ──────────────── */
@@ -137,6 +145,18 @@ class DescriptorBuilder
                        const char* disp_json);
     bool EndSettings();
 
+    /* ── Buttons component (kind "buttons", protocol §5.5) ──────────
+     * The ButtonBank surface: stateful buttons emit as ordinary 1-byte
+     * enum fields (so field-unaware hosts degrade to a plain editable
+     * group), each carrying a "btn" object with the physical index and
+     * gesture labels; momentary buttons emit into a "modal" array.
+     * Modal entries must precede the first field (same ordering rule as
+     * GenericMeta).  Offsets are validated against SerializedSize(). */
+    bool BeginButtons(const char* id, const Serializable& s);
+    bool ButtonsModal(const VirtualButton& b, int16_t page);
+    bool ButtonsField(const VirtualButton& b, uint32_t off, int16_t page);
+    bool EndButtons();
+
     /* ── Buttons (top-level, optional) ──────────────────────────────
      * A module's physical push buttons rendered as descriptor metadata
      * alongside the component list.  The array itself is emitted in
@@ -146,6 +166,12 @@ class DescriptorBuilder
      * a no-op — the key is omitted entirely, preserving descriptor
      * bytes on modules that expose no button metadata. */
     bool Buttons(const VirtualButton* buttons, uint8_t count);
+
+    template <size_t N>
+    bool Buttons(const VirtualButton (&buttons)[N])
+    {
+        return Buttons(buttons, static_cast<uint8_t>(N));
+    }
 
     /* ── Raw root fragments (top-level, optional) ───────────────────
      * Splice a `"key":value` fragment (no surrounding braces) into the
@@ -195,6 +221,11 @@ class DescriptorBuilder
     const Pager* pager_        = nullptr;
     bool         fields_open_  = false;
     bool         generic_open_ = false;
+
+    /* Buttons context. */
+    bool buttons_open_ = false;
+    bool modal_open_   = false;
+    uint32_t buttons_next_off_ = 0u;   /* fields must land densely in order */
 
     /* Settings context: serialized offset per (page, pot); -1 when the
      * slot persists nothing. */

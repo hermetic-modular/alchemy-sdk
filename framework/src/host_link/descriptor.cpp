@@ -224,7 +224,11 @@ bool DescriptorBuilder::BeginComponent(const char* id, const char* kind,
                                        const Serializable& s,
                                        const char* display_name)
 {
-    if (pager_ || settings_ || generic_open_) { error_ = true; return false; }
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+    {
+        error_ = true;
+        return false;
+    }
     if (!CheckManaged(s)) return false;
 
     OpenComponent(id, kind, s);
@@ -339,6 +343,224 @@ bool DescriptorBuilder::GenericMetaUInt(const char* key, uint32_t value)
     return !error_;
 }
 
+/* ── Buttons component (kind "buttons") ─────────────────────────────── */
+
+bool DescriptorBuilder::BeginButtons(const char* id, const Serializable& s)
+{
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+    {
+        error_ = true;
+        return false;
+    }
+    if (!CheckManaged(s)) return false;
+
+    OpenComponent(id, "buttons", s);
+    buttons_open_     = true;
+    buttons_next_off_ = 0u;
+    return !error_;
+}
+
+/* Derive a host label for one gesture from the button's declaration:
+ * explicit label wins; else "Cycle LP / BP / HP" / "Toggle On / Off" /
+ * "Set <zone label>" from the zone labels; else just the verb. */
+static const char* DeriveGestureLabel(const VirtualButton& b,
+                                      const VirtualButton::Gesture& g,
+                                      char* buf, size_t cap)
+{
+    if (g.label) return g.label;
+    if (g.fn)    return "";
+
+    const bool toggle = (g.action == VirtualButton::Action::Toggle)
+                        || (g.action == VirtualButton::Action::Cycle
+                            && b.Zones() == 2u);
+
+    size_t n = 0;
+    auto append = [&](const char* s)
+    {
+        while (*s && n + 1u < cap) buf[n++] = *s++;
+    };
+
+    if (g.action == VirtualButton::Action::Set)
+    {
+        append("Set");
+        if (b.ZoneLabels() && g.set_zone < b.NumZoneLabels())
+        {
+            append(" ");
+            append(b.ZoneLabels()[g.set_zone]);
+        }
+        buf[n] = '\0';
+        return buf;
+    }
+
+    append(toggle ? "Toggle" : "Cycle");
+    if (b.ZoneLabels())
+    {
+        for (uint8_t i = 0; i < b.NumZoneLabels(); i++)
+        {
+            append(i == 0u ? " " : " / ");
+            append(b.ZoneLabels()[i]);
+        }
+    }
+    buf[n] = '\0';
+    return buf;
+}
+
+static void EmitGestureEntry(JsonWriter& w, const char* gesture,
+                             const char* label)
+{
+    w.BeginObj();
+    w.Key("gesture"); w.Str(gesture);
+    w.Key("label");   w.Str(label ? label : "");
+    w.EndObj();
+}
+
+/* The declared gestures as a JSON array: the structured tap/hold slots
+ * (labels derived when not given) plus any legacy Action() metadata. */
+static void EmitGestures(JsonWriter& w, const VirtualButton& b,
+                         bool implicit_tap)
+{
+    char buf[96];
+    w.BeginArr();
+    if (b.TapGesture().used)
+        EmitGestureEntry(w, "tap",
+                         DeriveGestureLabel(b, b.TapGesture(), buf, sizeof buf));
+    else if (implicit_tap)
+    {
+        VirtualButton::Gesture g;
+        g.used = true;
+        EmitGestureEntry(w, "tap", DeriveGestureLabel(b, g, buf, sizeof buf));
+    }
+    if (b.HoldGesture().used)
+        EmitGestureEntry(w, "hold",
+                         DeriveGestureLabel(b, b.HoldGesture(), buf, sizeof buf));
+    for (uint8_t i = 0; i < b.NumActions(); i++)
+        EmitGestureEntry(w, b.ActionGesture(i) ? b.ActionGesture(i) : "",
+                         b.ActionLabel(i));
+    w.EndArr();
+}
+
+bool DescriptorBuilder::ButtonsModal(const VirtualButton& b, int16_t page)
+{
+    /* Modal entries precede the fields array — same JSON-shape rule as
+     * GenericMeta. */
+    if (!buttons_open_ || fields_open_) { error_ = true; return false; }
+    if (!modal_open_)
+    {
+        w_.Key("modal");
+        w_.BeginArr();
+        modal_open_ = true;
+    }
+    w_.BeginObj();
+    w_.Key("id");   w_.Str(b.Ident() ? b.Ident() : "");
+    w_.Key("name"); w_.Str(b.Name()  ? b.Name()  : "");
+    if (b.HasHw()) { w_.Key("index"); w_.UInt(b.HwIndex()); }
+    if (page >= 0) { w_.Key("page");  w_.UInt(static_cast<uint32_t>(page)); }
+    w_.Key("gestures");
+    EmitGestures(w_, b, false);
+    w_.EndObj();
+    return !error_;
+}
+
+bool DescriptorBuilder::ButtonsField(const VirtualButton& b, uint32_t off,
+                                     int16_t page)
+{
+    if (!buttons_open_) { error_ = true; return false; }
+    if (modal_open_)
+    {
+        w_.EndArr();
+        modal_open_ = false;
+    }
+    if (!fields_open_)
+    {
+        w_.Key("fields");
+        w_.BeginArr();
+        fields_open_ = true;
+    }
+
+    /* One byte per stateful button, dense, in roster order. */
+    if (b.Zones() < 2u || off != buttons_next_off_
+        || off + 1u > comp_size_)
+    {
+        error_ = true;
+        return false;
+    }
+    buttons_next_off_++;
+
+    w_.BeginObj();
+    w_.Key("id");   w_.Str(b.Ident() ? b.Ident() : "");
+    w_.Key("name"); w_.Str(b.Name()  ? b.Name()  : "");
+    w_.Key("off");  w_.UInt(off);
+    if (page >= 0) { w_.Key("page"); w_.UInt(static_cast<uint32_t>(page)); }
+    w_.Key("type");  w_.Str("enum");
+    w_.Key("zones"); w_.UInt(b.Zones());
+    w_.Key("def");   w_.UInt(b.DefaultZone());
+
+    w_.Key("disp");
+    if (b.DispJson())
+    {
+        w_.RawValue(b.DispJson());
+    }
+    else if (b.ZoneLabels())
+    {
+        w_.BeginObj();
+        w_.Key("kind"); w_.Str("enum");
+        w_.Key("labels");
+        w_.BeginArr();
+        for (uint8_t i = 0; i < b.NumZoneLabels(); i++)
+            w_.Str(b.ZoneLabels()[i] ? b.ZoneLabels()[i] : "");
+        w_.EndArr();
+        w_.EndObj();
+    }
+    else
+    {
+        w_.RawValue("{\"kind\":\"enum\"}");
+    }
+
+    if (b.NearField()) { w_.Key("near"); w_.Str(b.NearField()); }
+
+    if (b.HasHw())
+    {
+        const bool implicit_tap = !b.TapGesture().used
+                                  && !b.HoldGesture().used;
+
+        w_.Key("btn");
+        w_.BeginObj();
+        w_.Key("index"); w_.UInt(b.HwIndex());
+
+        /* Primary action wire-name: the tap mutation (implicit Cycle
+         * reads as "toggle" on two-zone buttons).  A callback tap
+         * mutates nothing — the key is omitted. */
+        const VirtualButton::Gesture& tap = b.TapGesture();
+        if (implicit_tap || (tap.used && !tap.fn))
+        {
+            enum VirtualButton::Action act =
+                tap.used ? tap.action : VirtualButton::Action::Cycle;
+            if (act == VirtualButton::Action::Cycle && b.Zones() == 2u)
+                act = VirtualButton::Action::Toggle;
+            w_.Key("action");
+            w_.Str(VirtualButton::ActionName(act));
+        }
+        w_.Key("gestures");
+        EmitGestures(w_, b, implicit_tap);
+        w_.EndObj();
+    }
+    w_.EndObj();
+    return !error_;
+}
+
+bool DescriptorBuilder::EndButtons()
+{
+    if (!buttons_open_) { error_ = true; return false; }
+    if (modal_open_)  { w_.EndArr(); modal_open_  = false; }
+    if (fields_open_) { w_.EndArr(); fields_open_ = false; }
+    if (buttons_next_off_ != comp_size_) error_ = true;
+    w_.EndObj();
+    cum_off_ += comp_size_;
+    comp_index_++;
+    buttons_open_ = false;
+    return !error_;
+}
+
 /* ── Settings ───────────────────────────────────────────────────────── */
 
 bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,
@@ -443,7 +665,7 @@ bool DescriptorBuilder::EndSettings()
 
 bool DescriptorBuilder::RawRoot(const char* fragment)
 {
-    if (pager_ || settings_ || generic_open_
+    if (pager_ || settings_ || generic_open_ || buttons_open_
         || fragment == nullptr || fragment[0] == '\0'
         || num_root_fragments_ >= kMaxRootFragments)
     {
@@ -458,7 +680,7 @@ bool DescriptorBuilder::RawRoot(const char* fragment)
 
 bool DescriptorBuilder::Buttons(const VirtualButton* buttons, uint8_t count)
 {
-    if (pager_ || settings_ || generic_open_)
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
     {
         error_ = true;
         return false;

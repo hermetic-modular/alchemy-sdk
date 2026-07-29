@@ -16,6 +16,7 @@ set(SDK_ROOT "${CMAKE_SOURCE_DIR}")
 
 add_executable(hostlink_tests
     hostlink_tests.cpp
+    button_tests.cpp
     fs_tests.cpp
     param_lock_tests.cpp
     ram_diskio.cpp
@@ -25,6 +26,7 @@ add_executable(hostlink_tests
     "${SDK_ROOT}/framework/src/host_link/json_check.cpp"
     "${SDK_ROOT}/framework/src/storage/sd_card.cpp"
     "${SDK_ROOT}/framework/src/storage/fs_extension.cpp"
+    "${SDK_ROOT}/framework/src/surface/button_bank.cpp"
     "${SDK_ROOT}/framework/src/surface/pager.cpp"
     "${SDK_ROOT}/framework/src/surface/settings.cpp"
     "${SDK_ROOT}/framework/src/surface/presets.cpp"
