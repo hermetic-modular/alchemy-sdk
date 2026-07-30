@@ -41,65 +41,65 @@ static constexpr float kGainMaxDb = 24.f;
 
 /* Page 1 */
 
-static VirtualKnob l_hi_level = VirtualKnob(0, "Hi Level")
+static VirtualKnob l_hi_level = VirtualKnob(kPotTopLeft, "Hi Level")
     .Linear(-kGainMaxDb, +kGainMaxDb)
     .Ring(Bipolar(kLeftPalette.hi.level_pos,
                   kLeftPalette.hi.level_neg,
                   kLeftPalette.hi.level_center));
 
-static VirtualKnob l_hi_freq = VirtualKnob(1, "Hi Freq")
+static VirtualKnob l_hi_freq = VirtualKnob(kPotTopRight, "Hi Freq")
     .Exp(1000.f, 16000.f)
     .Ring(Level(kLeftPalette.hi.freq, FillAnim::Pulse));
 
-static VirtualKnob l_mid_level = VirtualKnob(2, "Mid Level")
+static VirtualKnob l_mid_level = VirtualKnob(kPotMiddleLeft, "Mid Level")
     .Linear(-kGainMaxDb, +kGainMaxDb)
     .Ring(Bipolar(kLeftPalette.mid.level_pos,
                   kLeftPalette.mid.level_neg,
                   kLeftPalette.mid.level_center));
 
-static VirtualKnob l_mid_freq = VirtualKnob(3, "Mid Freq")
+static VirtualKnob l_mid_freq = VirtualKnob(kPotMiddleRight, "Mid Freq")
     .Exp(200.f, 5000.f)
     .Ring(Level(kLeftPalette.mid.freq, FillAnim::Ripple));
 
-static VirtualKnob l_lo_level = VirtualKnob(4, "Lo Level")
+static VirtualKnob l_lo_level = VirtualKnob(kPotBottomLeft, "Lo Level")
     .Linear(-kGainMaxDb, +kGainMaxDb)
     .Ring(Bipolar(kLeftPalette.lo.level_pos,
                   kLeftPalette.lo.level_neg,
                   kLeftPalette.lo.level_center));
 
-static VirtualKnob l_lo_freq = VirtualKnob(5, "Lo Freq")
+static VirtualKnob l_lo_freq = VirtualKnob(kPotBottomRight, "Lo Freq")
     .Exp(60.f, 600.f)
     .Ring(Level(kLeftPalette.lo.freq, FillAnim::Pulse));
 
 
 /* Page 2 */
-static VirtualKnob r_hi_level = VirtualKnob(0, "Hi Level")
+static VirtualKnob r_hi_level = VirtualKnob(kPotTopLeft, "Hi Level")
     .Linear(-kGainMaxDb, +kGainMaxDb)
     .Ring(Bipolar(kRightPalette.hi.level_pos,
                   kRightPalette.hi.level_neg,
                   kRightPalette.hi.level_center));
 
-static VirtualKnob r_hi_freq = VirtualKnob(1, "Hi Freq")
+static VirtualKnob r_hi_freq = VirtualKnob(kPotTopRight, "Hi Freq")
     .Exp(1000.f, 16000.f)
     .Ring(Level(kRightPalette.hi.freq, FillAnim::Pulse));
 
-static VirtualKnob r_mid_level = VirtualKnob(2, "Mid Level")
+static VirtualKnob r_mid_level = VirtualKnob(kPotMiddleLeft, "Mid Level")
     .Linear(-kGainMaxDb, +kGainMaxDb)
     .Ring(Bipolar(kRightPalette.mid.level_pos,
                   kRightPalette.mid.level_neg,
                   kRightPalette.mid.level_center));
 
-static VirtualKnob r_mid_freq = VirtualKnob(3, "Mid Freq")
+static VirtualKnob r_mid_freq = VirtualKnob(kPotMiddleRight, "Mid Freq")
     .Exp(200.f, 5000.f)
     .Ring(Level(kRightPalette.mid.freq, FillAnim::Ripple));
 
-static VirtualKnob r_lo_level = VirtualKnob(4, "Lo Level")
+static VirtualKnob r_lo_level = VirtualKnob(kPotBottomLeft, "Lo Level")
     .Linear(-kGainMaxDb, +kGainMaxDb)
     .Ring(Bipolar(kRightPalette.lo.level_pos,
                   kRightPalette.lo.level_neg,
                   kRightPalette.lo.level_center));
 
-static VirtualKnob r_lo_freq = VirtualKnob(5, "Lo Freq")
+static VirtualKnob r_lo_freq = VirtualKnob(kPotBottomRight, "Lo Freq")
     .Exp(60.f, 600.f)
     .Ring(Level(kRightPalette.lo.freq, FillAnim::Pulse));
 
