@@ -81,8 +81,8 @@ static const char* kRouteModes[3] = {"Stereo", "Swapped", "Mono"};
 static constexpr LedPanel::Rgb kRouteColors[3] = {
     {0x67, 0xE8, 0xF9}, {0xFC, 0xA5, 0xA5}, {0xFF, 0xFF, 0xFF}};
 
-static VirtualButton route = VirtualButton("out.route", "Routing")
-    .Hw(kButtonB3)
+static VirtualButton route = VirtualButton(kButtonB3, "Routing")
+    .Ident("out.route")
     .Selector(kRouteModes)
     .Colors(kRouteColors)
     .Near("drive")
@@ -98,8 +98,8 @@ static const char* kPhaseModes[2] = {"Normal", "Inverted"};
 static constexpr LedPanel::Rgb kPhaseColors[2] = {
     {0xFC, 0xA5, 0xA5}, {0xB4, 0x3C, 0xFF}};
 
-static VirtualButton phase = VirtualButton("out.phase", "Phase")
-    .Hw(kButtonB3)
+static VirtualButton phase = VirtualButton(kButtonB3, "Phase")
+    .Ident("out.phase")
     .Selector(kPhaseModes)
     .Colors(kPhaseColors)
     .Bind(&s_phase);

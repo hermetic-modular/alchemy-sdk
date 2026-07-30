@@ -5,6 +5,7 @@
 
 #include "alchemy/surface/button_bank.h"
 
+#include <cstdio>
 #include <cstring>
 
 #include "alchemy/hw/i_button.h"
@@ -14,6 +15,15 @@
 #include "alchemy/surface/page.h"
 
 namespace alchemy {
+
+/* Effective field id: the declared Ident(), or the positional "b<hw>"
+ * fallback (mirrors the pager's "p<page>.<pot>" default). */
+static const char* EffectiveId(const VirtualButton& b, char* buf, size_t cap)
+{
+    if (b.Ident()) return b.Ident();
+    std::snprintf(buf, cap, "b%u", b.HwIndex());
+    return buf;
+}
 
 /* ── Page source ────────────────────────────────────────────────────── */
 
@@ -58,8 +68,13 @@ void ButtonBank::EnrollState(VirtualButton& b, int16_t page) const
         && b.NumZoneColors() != b.Zones())
         ok_ = false;
     if (b.HasHw() && num_hw_ > 0u && b.HwIndex() >= num_hw_) ok_ = false;
+    if (!b.Ident() && !b.HasHw()) ok_ = false;   /* no derivable id */
+    char id_a[8], id_b[8];
+    const char* bid = EffectiveId(b, id_b, sizeof id_b);
     for (uint8_t i = 0; i < num_cells_; i++)
-        if (std::strcmp(cells_[i].btn->Ident(), b.Ident()) == 0) ok_ = false;
+        if (std::strcmp(EffectiveId(*cells_[i].btn, id_a, sizeof id_a), bid)
+            == 0)
+            ok_ = false;
 
     const bool* pressed = (b.HasHw() && b.HwIndex() < kMaxHw)
                               ? &pressed_now_[b.HwIndex()]
@@ -368,15 +383,16 @@ uint32_t ButtonBank::SchemaHash() const
 {
     FreezeIfNeeded();
 
-    /* FNV-1a over each cell's (ident, zones), order-sensitive: any
-     * roster reshape invalidates saved slots instead of misreading. */
+    /* FNV-1a over each cell's (effective ident, zones), order-sensitive:
+     * any roster reshape invalidates saved slots instead of misreading. */
     uint32_t h = 2166136261u;
     auto fold  = [&h](uint8_t byte) { h = (h ^ byte) * 16777619u; };
     fold('B'); fold('T'); fold('N'); fold('S');
     for (uint8_t i = 0; i < num_cells_; i++)
     {
         const VirtualButton& b = *cells_[i].btn;
-        for (const char* s = b.Ident(); *s; s++)
+        char id_buf[8];
+        for (const char* s = EffectiveId(b, id_buf, sizeof id_buf); *s; s++)
             fold(static_cast<uint8_t>(*s));
         fold(0u);
         fold(b.Zones());

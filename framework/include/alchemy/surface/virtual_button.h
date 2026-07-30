@@ -18,11 +18,20 @@
  *
  *   static const char* kModes[3] = {"LP", "BP", "HP"};
  *
- *   static VirtualButton flt = VirtualButton("flt.mode", "Filter")
- *       .Hw(kButtonB3)
+ *   static VirtualButton flt = VirtualButton(kButtonB3, "Filter")
+ *       .Ident("flt.mode")             // stable host id (default "b<hw>")
  *       .Selector(kModes)              // 3 zones, labels, tap-cycles
  *       .Colors(kModeColors)           // per-zone LED feedback
  *       .Bind(SetFilterMode);          // fires on gesture and preset load
+ *
+ * Construction mirrors VirtualKnob: physical index + display name, with
+ * `.Ident()` pinning the stable field id (defaults to positional
+ * "b<hw>"; buttons sharing a hardware index need explicit idents).
+ * Host-only state — persisted and browser-editable with no panel
+ * gesture — uses the (ident, name) constructor instead.  One edge: a
+ * bare literal `0` first argument is ambiguous between the two
+ * constructors and fails to compile — pass the board constant
+ * (kButtonB1).
  *
  * Defaults are derived: a stateful button with no declared gesture
  * tap-cycles its zones; host gesture labels are derived from the zone
@@ -85,10 +94,23 @@ class VirtualButton
     };
 
     /**
+     * Physical button, mirroring VirtualKnob(pot, name).
+     *
+     * @param hw    Physical button index (e.g. kButtonB3).  A bare
+     *              literal 0 is ambiguous with the ctor below — pass
+     *              the board constant.
+     * @param name  Display name (e.g. "Filter").
+     */
+    constexpr VirtualButton(uint8_t hw, const char* name)
+        : ident_(nullptr), name_(name), hw_(hw) {}
+
+    /**
+     * Host-only state (no panel gesture) and legacy metadata tables.
+     *
      * @param ident  Stable id (e.g. "flt.mode"). Hosts key on this — never
      *               rename (a rename also invalidates saved presets once
      *               the button is bank-managed).
-     * @param name   Display name (e.g. "Filter").
+     * @param name   Display name.
      */
     constexpr VirtualButton(const char* ident, const char* name)
         : ident_(ident), name_(name) {}
@@ -125,12 +147,17 @@ class VirtualButton
         return *this;
     }
 
-    /* ── Hardware + state shape (ButtonBank-managed buttons) ─────────── */
+    /* ── Identity + state shape (ButtonBank-managed buttons) ─────────── */
 
-    /** Physical button index on the board (e.g. kButtonB3).  Omit for
-     *  host-only state: the field still persists and is editable from
-     *  the browser, it just has no panel gesture. */
-    constexpr VirtualButton& Hw(uint8_t hw_index) { hw_ = hw_index; return *this; }
+    /** Stable field id (e.g. "flt.mode").  Defaults to the positional
+     *  "b<hw>"; set one to keep host presets addressable when the
+     *  button later moves, and always when two buttons share a
+     *  hardware index. */
+    constexpr VirtualButton& Ident(const char* id)
+    {
+        ident_ = id;
+        return *this;
+    }
 
     /** N-zone persisted state (N ≥ 2), one byte in the preset blob. */
     constexpr VirtualButton& Selector(uint8_t zones)

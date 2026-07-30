@@ -117,16 +117,19 @@ struct FakeStorage : KnobStorage
 static const char* kModes[3] = {"LP", "BP", "HP"};
 static const char* kOnOff[2] = {"Off", "On"};
 
+/* Bare literal 0 is ctor-ambiguous by design; boards use kButtonB1. */
+constexpr uint8_t kBtn0 = 0, kBtn1 = 1, kBtn2 = 2;
+
 /* ── Roster, identity keying, serialization ────────────────────────── */
 
 void TestRosterAndSerialization()
 {
-    VirtualButton a = VirtualButton("flt.mode", "Filter")
-                          .Hw(1).Selector(kModes).Default(1);
-    VirtualButton b = VirtualButton("osc.sub", "Sub").Hw(2).Toggle();
-    VirtualButton c = VirtualButton("shared", "Shared").Hw(0).Selector(4);
-    VirtualButton g = VirtualButton("bypass", "Bypass").Hw(2).Toggle();
-    VirtualButton m = VirtualButton("trig", "Trigger").Hw(1);
+    VirtualButton a = VirtualButton(kBtn1, "Filter")
+                          .Ident("flt.mode").Selector(kModes).Default(1);
+    VirtualButton b = VirtualButton(kBtn2, "Sub").Ident("osc.sub").Toggle();
+    VirtualButton c = VirtualButton(kBtn0, "Shared").Ident("shared").Selector(4);
+    VirtualButton g = VirtualButton(kBtn2, "Bypass").Ident("bypass").Toggle();
+    VirtualButton m = VirtualButton(kBtn1, "Trigger").Ident("trig");
 
     Page pg0 = Page(0);
     pg0.Buttons(a, c, m);
@@ -178,7 +181,7 @@ void TestSchemaHash()
 {
     auto hash_of = [](const char* ident, uint8_t zones)
     {
-        VirtualButton b = VirtualButton(ident, "B").Hw(0).Selector(zones);
+        VirtualButton b = VirtualButton(kBtn0, "B").Ident(ident).Selector(zones);
         Page          pg(0);
         pg.Buttons(b);
         ButtonBank bank;
@@ -197,7 +200,7 @@ void TestDerivedTapCycle()
 {
     uint8_t       target = 0;
     VirtualButton a =
-        VirtualButton("m", "Mode").Hw(0).Selector(kModes).Bind(&target);
+        VirtualButton(kBtn0, "Mode").Selector(kModes).Bind(&target);
     Page pg(0);
     pg.Buttons(a);
 
@@ -218,8 +221,7 @@ void TestDerivedTapCycle()
 void TestHoldAndTapArbitration()
 {
     int           taps = 0;
-    VirtualButton a = VirtualButton("m", "Mode")
-                          .Hw(0)
+    VirtualButton a = VirtualButton(kBtn0, "Mode")
                           .Selector(kModes)
                           .Default(2)
                           .Tap(VirtualButton::Action::Cycle)
@@ -253,8 +255,8 @@ void TestHoldAndTapArbitration()
 
     /* A hold-only button gets no implicit tap. */
     VirtualButton h =
-        VirtualButton("h", "H").Hw(1).Toggle().Hold(400,
-                                                    VirtualButton::Action::Toggle);
+        VirtualButton(kBtn1, "H").Toggle().Hold(400,
+                                                VirtualButton::Action::Toggle);
     pg.Buttons(h);
     rig.Tap(bank, 1);
     BCHECK_EQ(h.Zone(), uint8_t{0});
@@ -262,8 +264,10 @@ void TestHoldAndTapArbitration()
 
 void TestPressPageLatch()
 {
-    VirtualButton p0 = VirtualButton("p0", "P0").Hw(0).Selector(kModes);
-    VirtualButton p1 = VirtualButton("p1", "P1").Hw(0).Selector(kModes);
+    /* Same hw on two pages: explicit idents are required (derived
+     * "b0" ids would collide). */
+    VirtualButton p0 = VirtualButton(kBtn0, "P0").Ident("p0").Selector(kModes);
+    VirtualButton p1 = VirtualButton(kBtn0, "P1").Ident("p1").Selector(kModes);
     Page pg0(0), pg1(1);
     pg0.Buttons(p0);
     pg1.Buttons(p1);
@@ -290,8 +294,8 @@ void TestPressPageLatch()
 
 void TestConsumeHandshakeAndEdgeContract()
 {
-    VirtualButton a = VirtualButton("m", "Mode").Hw(0).Selector(kModes);
-    VirtualButton other = VirtualButton("o", "Other").Hw(1).Toggle();
+    VirtualButton a = VirtualButton(kBtn0, "Mode").Selector(kModes);
+    VirtualButton other = VirtualButton(kBtn1, "Other").Toggle();
     Page pg(0);
     pg.Buttons(a, other);
 
@@ -317,7 +321,7 @@ void TestConsumeHandshakeAndEdgeContract()
 
 void TestGatedPressIsInert()
 {
-    VirtualButton a = VirtualButton("m", "Mode").Hw(0).Selector(kModes);
+    VirtualButton a = VirtualButton(kBtn0, "Mode").Selector(kModes);
     Page pg(0);
     pg.Buttons(a);
 
@@ -352,8 +356,7 @@ void TestDeferredChangeFlush()
 {
     int           fires  = 0;
     uint8_t       target = 0;
-    VirtualButton a = VirtualButton("m", "Mode")
-                          .Hw(0)
+    VirtualButton a = VirtualButton(kBtn0, "Mode")
                           .Selector(kModes)
                           .Bind(&target)
                           .OnChange([](uint8_t, void* ctx)
@@ -392,7 +395,7 @@ void TestOkLatch()
     {
         /* Label count mismatch. */
         VirtualButton a =
-            VirtualButton("m", "Mode").Hw(0).Selector(3).Labels(kOnOff);
+            VirtualButton(kBtn0, "Mode").Selector(3).Labels(kOnOff);
         Page pg(0);
         pg.Buttons(a);
         ButtonBank bank;
@@ -402,8 +405,8 @@ void TestOkLatch()
     }
     {
         /* Duplicate ident across two buttons. */
-        VirtualButton a = VirtualButton("dup", "A").Hw(0).Toggle();
-        VirtualButton b = VirtualButton("dup", "B").Hw(1).Toggle();
+        VirtualButton a = VirtualButton(kBtn0, "A").Ident("dup").Toggle();
+        VirtualButton b = VirtualButton(kBtn1, "B").Ident("dup").Toggle();
         Page pg(0);
         pg.Buttons(a, b);
         ButtonBank bank;
@@ -412,9 +415,31 @@ void TestOkLatch()
         BCHECK(!bank.Ok());
     }
     {
+        /* Two ident-less buttons on one hw index: derived "b0" ids
+         * collide. */
+        VirtualButton a = VirtualButton(kBtn0, "A").Toggle();
+        VirtualButton b = VirtualButton(kBtn0, "B").Toggle();
+        Page pg(0);
+        pg.Buttons(a, b);
+        ButtonBank bank;
+        bank.Pages(pg);
+        (void)bank.SerializedSize();
+        BCHECK(!bank.Ok());
+    }
+    {
+        /* Stateful with neither ident nor hw: no derivable id. */
+        VirtualButton a = VirtualButton(nullptr, "X").Selector(3);
+        Page pg(0);
+        pg.Buttons(a);
+        ButtonBank bank;
+        bank.Pages(pg);
+        (void)bank.SerializedSize();
+        BCHECK(!bank.Ok());
+    }
+    {
         /* Default outside the zone range. */
         VirtualButton a =
-            VirtualButton("m", "Mode").Hw(0).Selector(3).Default(3);
+            VirtualButton(kBtn0, "Mode").Selector(3).Default(3);
         Page pg(0);
         pg.Buttons(a);
         ButtonBank bank;
@@ -424,7 +449,7 @@ void TestOkLatch()
     }
     {
         /* A stateful button first seen after freeze: inert + latched. */
-        VirtualButton a = VirtualButton("a", "A").Hw(0).Toggle();
+        VirtualButton a = VirtualButton(kBtn0, "A").Toggle();
         Page pg(0);
         pg.Buttons(a);
         Rig        rig;
@@ -434,7 +459,7 @@ void TestOkLatch()
         (void)bank.SerializedSize();
         BCHECK(bank.Ok());
 
-        VirtualButton late = VirtualButton("late", "Late").Hw(1).Toggle();
+        VirtualButton late = VirtualButton(kBtn1, "Late").Toggle();
         pg.Buttons(late);
         rig.Tap(bank, 1);
         BCHECK_EQ(late.Zone(), uint8_t{0});
@@ -449,20 +474,21 @@ void TestDescriptorEmission()
     static const LedPanel::Rgb kCols[3] = {
         {0x00, 0xFF, 0xFF}, {0xFF, 0xA0, 0x00}, {0xFF, 0x00, 0xFF}};
 
-    VirtualButton flt = VirtualButton("flt.mode", "Filter")
-                            .Hw(2)
+    VirtualButton flt = VirtualButton(kBtn2, "Filter")
+                            .Ident("flt.mode")
                             .Selector(kModes)
                             .Default(1)
                             .Colors(kCols)
                             .Near("flt.cutoff");
-    VirtualButton sub  = VirtualButton("osc.sub", "Sub").Hw(1).Toggle();
+    VirtualButton sub  = VirtualButton(kBtn1, "Sub").Ident("osc.sub").Toggle();
+    VirtualButton noid = VirtualButton(kBtn1, "NoId").Toggle();
     VirtualButton host = VirtualButton("cfg.slot", "Slot").Selector(4);
-    VirtualButton trig = VirtualButton("trig", "Trigger")
-                             .Hw(0)
+    VirtualButton trig = VirtualButton(kBtn0, "Trigger")
+                             .Ident("trig")
                              .Tap(+[](void*) {}, "Fire the kick");
 
     Page pg0(0), pg1(1);
-    pg0.Buttons(flt, trig);
+    pg0.Buttons(flt, trig, noid);
     pg1.Buttons(sub, host);
 
     Rig        rig;
@@ -483,7 +509,7 @@ void TestDescriptorEmission()
 
     /* Component header: kind, size = one byte per stateful button. */
     BCHECK(json.find("\"kind\":\"buttons\",") != std::string::npos);
-    BCHECK(json.find("\"size\":3,\"off\":0") != std::string::npos);
+    BCHECK(json.find("\"size\":4,\"off\":0") != std::string::npos);
 
     /* Modal array precedes fields; the momentary is in it, with its
      * page and explicit label. */
@@ -513,6 +539,11 @@ void TestDescriptorEmission()
     BCHECK(json.find("\"btn\":{\"index\":1,\"action\":\"toggle\",")
            != std::string::npos);
 
+    /* Ident-less button: positional "b<hw>" id, dense offset. */
+    BCHECK(json.find("\"id\":\"b1\",\"name\":\"NoId\",\"off\":1,"
+                     "\"page\":0")
+           != std::string::npos);
+
     /* Host-only state: field present, no btn object. */
     const auto slot = json.find("\"id\":\"cfg.slot\"");
     BCHECK(slot != std::string::npos);
@@ -522,7 +553,7 @@ void TestDescriptorEmission()
     /* A latched bank fails the whole build — no descriptor beats a
      * wrong one. */
     VirtualButton bad =
-        VirtualButton("bad", "Bad").Hw(0).Selector(3).Labels(kOnOff);
+        VirtualButton(kBtn0, "Bad").Selector(3).Labels(kOnOff);
     Page pgb(0);
     pgb.Buttons(bad);
     ButtonBank broken;

@@ -5,6 +5,8 @@
 
 #include "alchemy/host_link/descriptor.h"
 
+#include <cstdio>
+
 #include "alchemy/host_link/json_check.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/presets.h"
@@ -360,6 +362,16 @@ bool DescriptorBuilder::BeginButtons(const char* id, const Serializable& s)
     return !error_;
 }
 
+/* Effective field id: the declared Ident(), or the positional "b<hw>"
+ * fallback (must match ButtonBank's derivation). */
+static const char* ButtonEffectiveId(const VirtualButton& b, char* buf,
+                                     size_t cap)
+{
+    if (b.Ident()) return b.Ident();
+    std::snprintf(buf, cap, "b%u", b.HwIndex());
+    return buf;
+}
+
 /* Derive a host label for one gesture from the button's declaration:
  * explicit label wins; else "Cycle LP / BP / HP" / "Toggle On / Off" /
  * "Set <zone label>" from the zone labels; else just the verb. */
@@ -450,9 +462,10 @@ bool DescriptorBuilder::ButtonsModal(const VirtualButton& b, int16_t page)
         w_.BeginArr();
         modal_open_ = true;
     }
+    char idbuf[8];
     w_.BeginObj();
-    w_.Key("id");   w_.Str(b.Ident() ? b.Ident() : "");
-    w_.Key("name"); w_.Str(b.Name()  ? b.Name()  : "");
+    w_.Key("id");   w_.Str(ButtonEffectiveId(b, idbuf, sizeof idbuf));
+    w_.Key("name"); w_.Str(b.Name() ? b.Name() : "");
     if (b.HasHw()) { w_.Key("index"); w_.UInt(b.HwIndex()); }
     if (page >= 0) { w_.Key("page");  w_.UInt(static_cast<uint32_t>(page)); }
     w_.Key("gestures");
@@ -486,9 +499,10 @@ bool DescriptorBuilder::ButtonsField(const VirtualButton& b, uint32_t off,
     }
     buttons_next_off_++;
 
+    char idbuf[8];
     w_.BeginObj();
-    w_.Key("id");   w_.Str(b.Ident() ? b.Ident() : "");
-    w_.Key("name"); w_.Str(b.Name()  ? b.Name()  : "");
+    w_.Key("id");   w_.Str(ButtonEffectiveId(b, idbuf, sizeof idbuf));
+    w_.Key("name"); w_.Str(b.Name() ? b.Name() : "");
     w_.Key("off");  w_.UInt(off);
     if (page >= 0) { w_.Key("page"); w_.UInt(static_cast<uint32_t>(page)); }
     w_.Key("type");  w_.Str("enum");

@@ -9,8 +9,8 @@ do.  `VirtualButton` + `ButtonBank` collapse them into one declaration:
 ```cpp
 static const char* kModes[3] = {"LP", "BP", "HP"};
 
-static VirtualButton flt = VirtualButton("flt.mode", "Filter")
-    .Hw(kButtonB3)
+static VirtualButton flt = VirtualButton(kButtonB3, "Filter")
+    .Ident("flt.mode")         // stable host id (default "b<hw>")
     .Selector(kModes)          // 3 zones + labels from one array
     .Colors(kModeColors)       // per-zone LED feedback
     .Bind(SetFilterMode);      // fires on gesture and preset load
@@ -47,7 +47,8 @@ keyed by the **VirtualButton object**.  Pages are pure dispatch scope:
 
 - The same physical button does different things on different pages by
   declaring one VirtualButton per page (`page_a.Buttons(flt)`,
-  `page_b.Buttons(wave)` — both `.Hw(kButtonB3)`).
+  `page_b.Buttons(wave)` — both constructed on `kButtonB3`, each with
+  its own `.Ident()`).
 - The same object on several pages is deliberately one shared control
   (one preset byte, rendered on each page).
 - Moving a button between pages at runtime redirects dispatch and
@@ -59,6 +60,8 @@ keyed by the **VirtualButton object**.  Pages are pure dispatch scope:
 
 | Declaration | Meaning |
 |---|---|
+| `VirtualButton(hw, name)` | physical button (e.g. `kButtonB1`; a bare literal `0` won't compile — use the constant) |
+| `.Ident("field.id")` | stable host id; defaults to `"b<hw>"` — required when two buttons share a hw index |
 | `.Selector(kLabels)` | N-zone state; zones + labels from one array |
 | `.Selector(n)` / `.Toggle()` | unlabeled N zones / 2 zones |
 | `.Default(z)` | factory zone (checked against N) |
@@ -70,7 +73,7 @@ keyed by the **VirtualButton object**.  Pages are pure dispatch scope:
 | `.Bind(&var)` / `.Bind(Setter)` | write zone into a variable / setter |
 | `.OnChange(fn, ctx)` | general notification, after Bind targets |
 | `.Near("field.id")` | browser hint: render beside that field |
-| omit `.Hw()` | host-only state: persisted + editable, no gesture |
+| `VirtualButton(ident, name)` | host-only state: persisted + editable, no gesture |
 
 Gesture callbacks and mutations run in the control-loop poll (the
 `OnPoll` context).  Preset loads apply data in `Deserialize` but defer
