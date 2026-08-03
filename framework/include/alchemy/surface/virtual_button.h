@@ -316,11 +316,14 @@ class VirtualButton
 
     /* ── Host descriptor metadata (optional) ─────────────────────────── */
 
-    /** Hint: render this button beside the named field (e.g. its
-     *  companion knob "flt.cutoff"). */
-    constexpr VirtualButton& Near(const char* field_id)
+    /** Attach this button to the named field (e.g. its companion knob
+     *  "flt.cutoff"): hosts render it with that field wherever the
+     *  field appears, falling back to the page's plain button group
+     *  where it doesn't.  The id must name a field the descriptor
+     *  emits — a miss fails the descriptor build. */
+    constexpr VirtualButton& Anchor(const char* field_id)
     {
-        near_ = field_id;
+        anchor_ = field_id;
         return *this;
     }
 
@@ -371,7 +374,7 @@ class VirtualButton
     constexpr const Gesture& TapGesture()  const { return tap_; }
     constexpr const Gesture& HoldGesture() const { return hold_; }
 
-    constexpr const char* NearField() const { return near_; }
+    constexpr const char* AnchorField() const { return anchor_; }
     constexpr const char* DispJson()  const { return disp_; }
 
     /** Fire the change targets (Bind then OnChange).  ButtonBank calls
@@ -455,7 +458,7 @@ class VirtualButton
     void*    change_ctx_              = nullptr;
 
     /* Host metadata. */
-    const char* near_ = nullptr;
+    const char* anchor_ = nullptr;
     const char* disp_ = nullptr;
 
     /* Wiring (set by ButtonBank). */

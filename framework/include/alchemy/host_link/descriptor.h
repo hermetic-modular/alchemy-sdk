@@ -195,19 +195,37 @@ class DescriptorBuilder
 
     bool GenericMetaUInt(const char* key, uint32_t value);
 
-    /** Close all structures and validate totals.  Returns descriptor
-     *  length in bytes, or 0 if anything drifted or overflowed. */
+    /** Close all structures and validate totals — including that every
+     *  cross-field ref (a button's anchor, a root-array controls entry)
+     *  names a field some component emitted; Manage() order is
+     *  arbitrary, so neither side can check at emission time.  Returns
+     *  descriptor length in bytes, or 0 if anything failed. */
     uint32_t Finish();
 
+    /** Reason for the first failure (static text or a short formatted
+     *  message owned by the builder), or nullptr while clean. */
+    const char* LastError() const { return err_; }
+
   private:
-    static constexpr uint8_t kMaxSettingsPages = 4u;
-    static constexpr uint8_t kMaxPots          = 8u;
+    static constexpr uint8_t  kMaxSettingsPages = 4u;
+    static constexpr uint8_t  kMaxPots          = 8u;
+    static constexpr uint16_t kMaxFieldIds      = 192u;
+    static constexpr uint8_t  kMaxRefs          = 24u;
+    static constexpr uint8_t  kMaxPosIds        = 12u;
 
     bool CheckManaged(const Serializable& s);
     void OpenComponent(const char* id, const char* kind,
                        const Serializable& s);
     void EmitPageMeta(const char* const* names, const char* const* colors,
                       uint8_t num_pages);
+    void EmitRootButtons();
+
+    bool        Fail(const char* msg);
+    bool        FailRef(const char* kind, const char* target,
+                        const char* what);
+    bool        RecordFieldId(const char* id);
+    bool        RecordRef(const char* kind, const char* target);
+    const char* PoolPositionalId(uint8_t hw);
 
     JsonWriter     w_;
     const Presets& presets_;
@@ -240,6 +258,19 @@ class DescriptorBuilder
     /* Raw root fragments stashed for emission during Finish(). */
     const char* root_fragments_[kMaxRootFragments] = {};
     uint8_t     num_root_fragments_                = 0u;
+
+    /* Ref validation: every emitted field id, every cross-field ref,
+     * matched in Finish().  Ids are caller-owned static strings except
+     * positional "b<hw>" ids, which are pooled here. */
+    struct Ref { const char* kind; const char* target; };
+    const char* field_ids_[kMaxFieldIds]  = {};
+    uint16_t    num_field_ids_            = 0u;
+    Ref         refs_[kMaxRefs]           = {};
+    uint8_t     num_refs_                 = 0u;
+    char        pos_ids_[kMaxPosIds][8]   = {};
+    uint8_t     num_pos_ids_              = 0u;
+    const char* err_                      = nullptr;
+    char        errbuf_[96]               = {};
 };
 
 } // namespace hostlink

@@ -454,7 +454,7 @@ uses the extra keys to draw each button inside its page card instead.
     { "id": "flt.mode", "name": "Filter", "off": 0, "page": 0,
       "type": "enum", "zones": 3, "def": 0,
       "disp": { "kind": "enum", "labels": ["LP", "BP", "HP"] },
-      "near": "flt.cutoff",
+      "anchor": "flt.cutoff",
       "btn": { "index": 2, "action": "cycle",
                "gestures": [ { "gesture": "tap",
                                "label": "Cycle LP / BP / HP" } ] } },
@@ -471,9 +471,13 @@ uses the extra keys to draw each button inside its page card instead.
 - `page` (fields and modal entries) — the page the button lives on.
   Omitted when the button appears on several pages or is global:
   render it on every page.
-- `near` — optional placement hint: render this control beside the
-  named field (typically its companion knob).  May appear on fields
-  with no `btn` (host-only state).
+- `anchor` — optional attachment: render this control with the named
+  field (typically its companion knob) wherever the host renders that
+  field; where the target is not shown, fall back to the page's plain
+  button group.  Targets are field ids from any component (never
+  `modal` ids); firmware validates the ref at build time, so a host
+  never sees a dangling one — but must still tolerate junk per §6.
+  May appear on fields with no `btn` (host-only state).
 - `btn` — the physical binding: `index` is the hardware button,
   `action` the primary tap mutation (`cycle` / `toggle` / `set`), and
   `gestures[]` labeled gestures exactly as in §5.3.  A field without
@@ -485,7 +489,7 @@ uses the extra keys to draw each button inside its page card instead.
 The same physical `index` may appear in several entries with different
 `page` values — the same button does different things on different
 pages.  Hosts that do not recognize the kind must ignore `modal`,
-`near`, and `btn` per §6 and fall back to the generic field-bearing
+`anchor`, and `btn` per §6 and fall back to the generic field-bearing
 rendering; editing still works, which is the point.
 
 ## 6. Versioning rules

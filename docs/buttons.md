@@ -72,7 +72,7 @@ keyed by the **VirtualButton object**.  Pages are pure dispatch scope:
 | `.Tap(fn)` / `.Hold(ms, fn)` | momentary callbacks |
 | `.Bind(&var)` / `.Bind(Setter)` | write zone into a variable / setter |
 | `.OnChange(fn, ctx)` | general notification, after Bind targets |
-| `.Near("field.id")` | browser hint: render beside that field |
+| `.Anchor("field.id")` | attach to that field in the browser: renders with it wherever it appears, falls back to the page's button group where it doesn't; the id must name an emitted field or the descriptor build fails |
 | `VirtualButton(ident, name)` | host-only state: persisted + editable, no gesture |
 
 Gesture callbacks and mutations run in the control-loop poll (the
@@ -118,7 +118,11 @@ mutable afterwards.
 Declaration errors latch `Ok() == false` and fail the descriptor build
 ("no descriptor" beats a wrong one): label/color counts that disagree
 with the zone count, `Default()` out of range, duplicate idents, fewer
-than two zones, or a stateful button first seen after freeze.
+than two zones, or a stateful button first seen after freeze.  An
+`Anchor()` that names no emitted field (or the button's own id) fails
+the same way — checked at descriptor `Finish()`, since the target may
+live in a component managed later.  `DescriptorBuilder::LastError()`
+carries the reason for any of these.
 
 The bank's `SchemaHash()` folds every cell's ident and zone count, so
 reshaping the roster (or renaming an ident) invalidates saved preset
@@ -131,7 +135,7 @@ The bank emits one `kind: "buttons"` component (protocol §5.5).
 Stateful buttons are ordinary 1-byte enum fields, so **any** host —
 including one that predates the kind — renders them as an editable
 group and can change them today; button-aware hosts use the `page`,
-`near`, and `btn` keys to draw them inside the page cards.  Momentary
+`anchor`, and `btn` keys to draw them inside the page cards.  Momentary
 buttons emit into the component's `modal` array.
 
 Modules using the bank simply never call `Host::Buttons()`, so the

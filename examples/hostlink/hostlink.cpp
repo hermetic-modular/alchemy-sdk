@@ -85,7 +85,7 @@ static VirtualButton route = VirtualButton(kButtonB3, "Routing")
     .Ident("out.route")
     .Selector(kRouteModes)
     .Colors(kRouteColors)
-    .Near("drive")
+    .Anchor("drive")
     .Bind(&s_route);
 
 /* Same physical button, second page: on Beta, B3 toggles output phase

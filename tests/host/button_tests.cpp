@@ -479,7 +479,7 @@ void TestDescriptorEmission()
                             .Selector(kModes)
                             .Default(1)
                             .Colors(kCols)
-                            .Near("flt.cutoff");
+                            .Anchor("cfg.slot");
     VirtualButton sub  = VirtualButton(kBtn1, "Sub").Ident("osc.sub").Toggle();
     VirtualButton noid = VirtualButton(kBtn1, "NoId").Toggle();
     VirtualButton host = VirtualButton("cfg.slot", "Slot").Selector(4);
@@ -529,7 +529,7 @@ void TestDescriptorEmission()
     BCHECK(json.find("\"disp\":{\"kind\":\"enum\","
                      "\"labels\":[\"LP\",\"BP\",\"HP\"]}")
            != std::string::npos);
-    BCHECK(json.find("\"near\":\"flt.cutoff\"") != std::string::npos);
+    BCHECK(json.find("\"anchor\":\"cfg.slot\"") != std::string::npos);
     BCHECK(json.find("\"btn\":{\"index\":2,\"action\":\"cycle\",")
            != std::string::npos);
     BCHECK(json.find("\"label\":\"Cycle LP / BP / HP\"")
@@ -568,6 +568,185 @@ void TestDescriptorEmission()
               0u);
 }
 
+/* ── Anchor / controls ref validation ──────────────────────────────── */
+
+/** Minimal fielded component: one f32 "flt.cutoff" at offset 0. */
+struct CutoffComp : Serializable
+{
+    size_t   SerializedSize() const override { return 4u; }
+    uint32_t SchemaHash()     const override { return 0xC07C07u; }
+    void     Serialize(uint8_t* out) const override { std::memset(out, 0, 4u); }
+    bool     Deserialize(const uint8_t*) override { return true; }
+    bool     Describe(hostlink::ComponentWriter& w) const override
+    {
+        return w.Field("flt.cutoff", "Cutoff", 0u, FieldType::F32, 0.5f);
+    }
+};
+
+void TestAnchorValidation()
+{
+    static const DescriptorBuilder::ModuleInfo kVInfo =
+        {"btnbank", "Bank", "0.0.1", "gitbtn", "0.1.0", "v1"};
+
+    {
+        /* Dangling target: no descriptor, and the reason names it. */
+        VirtualButton flt = VirtualButton(kBtn2, "Filter")
+                                .Ident("flt.mode")
+                                .Selector(kModes)
+                                .Anchor("ftl.cutoff");
+        Page pg(0);
+        pg.Buttons(flt);
+        ButtonBank bank;
+        bank.Pages(pg);
+        Presets presets{s_dummy_qspi};
+        presets.Manage(bank);
+        (void)bank.SerializedSize();
+
+        static char buf[4096];
+        DescriptorBuilder db(buf, sizeof buf, presets);
+        db.Begin(kVInfo);
+        db.BeginButtons("buttons", bank);
+        for (uint8_t i = 0; i < bank.NumCells(); i++)
+            db.ButtonsField(*bank.CellAt(i), i, bank.CellPage(i));
+        db.EndButtons();
+        BCHECK_EQ(db.Finish(), 0u);
+        BCHECK(db.LastError() != nullptr
+               && std::strstr(db.LastError(), "ftl.cutoff") != nullptr);
+    }
+    {
+        /* Cross-component target, ref managed before the target. */
+        VirtualButton flt = VirtualButton(kBtn2, "Filter")
+                                .Ident("flt.mode")
+                                .Selector(kModes)
+                                .Anchor("flt.cutoff");
+        Page pg(0);
+        pg.Buttons(flt);
+        Rig        rig;
+        ButtonBank bank;
+        rig.Wire(bank);
+        bank.Pages(pg);
+        CutoffComp cutoff;
+        Presets    presets{s_dummy_qspi};
+        presets.Manage(bank);
+        presets.Manage(cutoff);
+        static char buf[8192];
+        const uint32_t len = RenderDescriptor(buf, sizeof buf, kVInfo,
+                                              presets, nullptr, nullptr, 0);
+        BCHECK(len > 0u);
+        BCHECK(std::string(buf, len).find("\"anchor\":\"flt.cutoff\"")
+               != std::string::npos);
+    }
+    {
+        /* Same target, target managed first. */
+        VirtualButton flt = VirtualButton(kBtn2, "Filter")
+                                .Ident("flt.mode")
+                                .Selector(kModes)
+                                .Anchor("flt.cutoff");
+        Page pg(0);
+        pg.Buttons(flt);
+        Rig        rig;
+        ButtonBank bank;
+        rig.Wire(bank);
+        bank.Pages(pg);
+        CutoffComp cutoff;
+        Presets    presets{s_dummy_qspi};
+        presets.Manage(cutoff);
+        presets.Manage(bank);
+        static char buf[8192];
+        BCHECK(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
+                                nullptr, 0)
+               > 0u);
+    }
+    {
+        /* Positional "b<hw>" ids are anchorable. */
+        VirtualButton noid = VirtualButton(kBtn1, "NoId").Toggle();
+        VirtualButton flt  = VirtualButton(kBtn2, "Filter")
+                                .Ident("flt.mode")
+                                .Selector(kModes)
+                                .Anchor("b1");
+        Page pg(0);
+        pg.Buttons(noid, flt);
+        Rig        rig;
+        ButtonBank bank;
+        rig.Wire(bank);
+        bank.Pages(pg);
+        Presets presets{s_dummy_qspi};
+        presets.Manage(bank);
+        static char buf[8192];
+        BCHECK(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
+                                nullptr, 0)
+               > 0u);
+    }
+    {
+        /* A modal id is not a field. */
+        VirtualButton trig = VirtualButton(kBtn0, "Trigger")
+                                 .Ident("trig")
+                                 .Tap(+[](void*) {}, "Fire");
+        VirtualButton flt = VirtualButton(kBtn2, "Filter")
+                                .Ident("flt.mode")
+                                .Selector(kModes)
+                                .Anchor("trig");
+        Page pg(0);
+        pg.Buttons(trig, flt);
+        Rig        rig;
+        ButtonBank bank;
+        rig.Wire(bank);
+        bank.Pages(pg);
+        Presets presets{s_dummy_qspi};
+        presets.Manage(bank);
+        static char buf[8192];
+        BCHECK_EQ(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
+                                   nullptr, 0),
+                  0u);
+    }
+    {
+        /* Self-anchor. */
+        VirtualButton flt = VirtualButton(kBtn2, "Filter")
+                                .Ident("flt.mode")
+                                .Selector(kModes)
+                                .Anchor("flt.mode");
+        Page pg(0);
+        pg.Buttons(flt);
+        Rig        rig;
+        ButtonBank bank;
+        rig.Wire(bank);
+        bank.Pages(pg);
+        Presets presets{s_dummy_qspi};
+        presets.Manage(bank);
+        static char buf[8192];
+        BCHECK_EQ(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
+                                   nullptr, 0),
+                  0u);
+    }
+    {
+        /* Legacy root-array Controls: a resolving ref passes, a dangling
+         * one fails the same way. */
+        VirtualButton good =
+            VirtualButton("b2", "Osc Source")
+                .Role(VirtualButton::Role::State)
+                .Controls("flt.cutoff", VirtualButton::Action::Cycle);
+        CutoffComp cutoff;
+        Presets    presets{s_dummy_qspi};
+        presets.Manage(cutoff);
+        static char buf[8192];
+        BCHECK(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
+                                nullptr, 0, &good, 1)
+               > 0u);
+
+        VirtualButton bad =
+            VirtualButton("b2", "Osc Source")
+                .Role(VirtualButton::Role::State)
+                .Controls("nope", VirtualButton::Action::Cycle);
+        CutoffComp cutoff2;
+        Presets    p2{s_dummy_qspi};
+        p2.Manage(cutoff2);
+        static char buf2[8192];
+        BCHECK_EQ(RenderDescriptor(buf2, sizeof buf2, kVInfo, p2, nullptr,
+                                   nullptr, 0, &bad, 1),
+                  0u);
+    }
+}
+
 } // namespace
 
 int RunButtonTests(int& checks, int& failures)
@@ -582,6 +761,7 @@ int RunButtonTests(int& checks, int& failures)
     TestDeferredChangeFlush();
     TestOkLatch();
     TestDescriptorEmission();
+    TestAnchorValidation();
 
     checks   += s_checks;
     failures += s_failures;

@@ -1047,9 +1047,24 @@ static void TestAutoDescribeGenericAndOverrides()
 
 static void TestButtonsEmission()
 {
-    RamFlash    flash;
-    Presets     presets{g_dummy_qspi};
-    TestComp<2> comp{0x77777777u};
+    /* Controls refs must resolve against emitted fields (Finish()
+     * validates them), so the fixture self-describes the two targets. */
+    struct ModeComp : TestComp<2>
+    {
+        ModeComp() : TestComp<2>(0x77777777u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            bool ok = w.Field("mode.source", "Source", 0, FieldType::Enum,
+                              0.f, "{\"kind\":\"enum\"}", 3);
+            ok &= w.Field("mode.sub", "Sub", 1, FieldType::Enum, 0.f,
+                          "{\"kind\":\"enum\"}", 2);
+            return ok;
+        }
+    };
+
+    RamFlash flash;
+    Presets  presets{g_dummy_qspi};
+    ModeComp comp;
     presets.Manage(comp);
     presets.Init(flash.Ops(), flash.Base());
 
