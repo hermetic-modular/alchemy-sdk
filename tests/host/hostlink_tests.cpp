@@ -31,6 +31,7 @@
 #include "alchemy/surface/page.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/param_lock.h"
+#include "alchemy/surface/button_bank.h"
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
@@ -681,6 +682,18 @@ static void TestTornWrite()
 
 /* ── Descriptor builder against real surfaces ──────────────────────── */
 
+/* Button roster for the fixture: every §5.5 shape a host must render —
+ * one hardware button doing different jobs on two pages, an anchored
+ * control, a global toggle, host-only state, and momentary entries. */
+static const char* const kLinkZones[3]  = {"Stereo", "Mono", "Mid-Side"};
+static const char* const kRouteZones[3] = {"Pre", "Post", "Off"};
+static const char* const kFiltZones[3]  = {"LP", "BP", "HP"};
+static const char* const kBypassZones[2] = {"Active", "Bypassed"};
+static const char* const kQualityZones[2] = {"Standard", "High"};
+
+/* Bare literal 0 is ctor-ambiguous by design; boards use kButtonB1. */
+constexpr uint8_t kBtnB1 = 0, kBtnB2 = 1, kBtnB3 = 2, kBtnB4 = 3;
+
 struct SurfaceFixture
 {
     RamFlash    flash;
@@ -690,11 +703,36 @@ struct SurfaceFixture
     PresetName  name;
     Presets     presets{g_dummy_qspi};
     TestComp<2> motion{0x33333333u};     /* stands in for ParamLock */
+    ButtonBank  buttons;
 
     SelectorHandle mode;
     KnobHandle     knob;
     BrightnessHandle bright;
     BipolarHandle  bip;
+
+    /* B2 is Stereo Link on page 0 and Dist Routing on page 1; B3 fires
+     * a trigger on page 0 and cycles the filter on page 1. */
+    VirtualButton link  = VirtualButton(kBtnB2, "Stereo Link")
+                              .Ident("b.link").Selector(kLinkZones);
+    VirtualButton route = VirtualButton(kBtnB2, "Dist Routing")
+                              .Ident("b.route").Selector(kRouteZones)
+                              .Anchor("p0.1");
+    VirtualButton filt  = VirtualButton(kBtnB3, "Filter Mode")
+                              .Ident("b.filt").Selector(kFiltZones)
+                              .Default(1).Anchor("p1.0");
+    VirtualButton bypass = VirtualButton(kBtnB4, "Bypass")
+                               .Ident("b.bypass").Selector(kBypassZones);
+    VirtualButton quality = VirtualButton("b.quality", "Render Quality")
+                                .Selector(kQualityZones);
+    VirtualButton trig  = VirtualButton(kBtnB3, "Trigger")
+                              .Ident("b.trig")
+                              .Tap(+[](void*) {}, "Fire the envelope");
+    VirtualButton pgbtn = VirtualButton(kBtnB1, "Page")
+                              .Ident("b.page")
+                              .Tap(+[](void*) {}, "Next Page");
+
+    Page btn_page_a{0};
+    Page btn_page_b{1};
 
     SurfaceFixture()
     {
@@ -704,9 +742,17 @@ struct SurfaceFixture
                          .Range(0.05f, 0.35f).Default(0.2f);
         bip    = settings.Page(3).Pot(2).Bipolar().Default(1.0f);
 
+        btn_page_a.Buttons(link, trig);
+        btn_page_b.Buttons(route, filt);
+        buttons.Pages(btn_page_a, btn_page_b);
+        buttons.Global(bypass);
+        buttons.Global(quality);
+        buttons.Global(pgbtn);
+
         presets.Manage(pager);
         presets.Manage(motion);
         presets.Manage(settings);
+        presets.Manage(buttons);
         presets.Manage(name);            /* last: offsets stay stable */
         presets.Init(flash.Ops(), flash.Base());
 
@@ -721,6 +767,18 @@ static const char* const kAltIds[18] = {
     "b0", "b1", "b2", "b3", "b4", "b5",
     "e0", "e1", "e2", "e3", "e4", "e5",
 };
+
+/* The fixture's buttons component, in roster order — modal entries
+ * first, then one dense byte per stateful button (protocol §5.5). */
+static bool EmitFixtureButtons(DescriptorBuilder& db, SurfaceFixture& sf)
+{
+    bool ok = db.BeginButtons("buttons", sf.buttons);
+    for (uint8_t i = 0; ok && i < sf.buttons.NumModal(); i++)
+        ok &= db.ButtonsModal(*sf.buttons.ModalAt(i), sf.buttons.ModalPage(i));
+    for (uint8_t i = 0; ok && i < sf.buttons.NumCells(); i++)
+        ok &= db.ButtonsField(*sf.buttons.CellAt(i), i, sf.buttons.CellPage(i));
+    return ok && db.EndButtons();
+}
 
 static std::string BuildTestDescriptor(SurfaceFixture& sf, bool& ok)
 {
@@ -758,6 +816,7 @@ static std::string BuildTestDescriptor(SurfaceFixture& sf, bool& ok)
     ok &= db.SettingsField(1, 0, "s.bright", "Brightness", nullptr);
     ok &= db.SettingsField(3, 2, "s.atten", "Atten 3", nullptr);
     ok &= db.EndSettings();
+    ok &= EmitFixtureButtons(db, sf);
     ok &= db.Name("name", sf.name);
     const uint32_t len = db.Finish();
     ok &= (len > 0);
@@ -802,9 +861,34 @@ static void TestDescriptorBuilder()
 
     /* Settings component size must equal its SerializedSize (13). */
     CHECK_EQ(sf.settings.SerializedSize(), size_t(13));
-    /* Total size = 72 + 8 + 13 + 24 (name) = 117. */
-    CHECK(json.find("\"size\":117") != std::string::npos);
+    /* Total size = 72 + 8 + 13 + 5 (buttons) + 24 (name) = 122. */
+    CHECK(json.find("\"size\":122") != std::string::npos);
     CHECK(json.find("\"id\":\"name\",\"kind\":\"name\"") != std::string::npos);
+
+    /* Buttons (§5.5): one dense byte per stateful button, modal first.
+     * B2 is Stereo Link on page 0 and Dist Routing on page 1; the
+     * anchors name pager fields in an earlier component. */
+    CHECK(json.find("\"kind\":\"buttons\",\"hash\":") != std::string::npos);
+    CHECK(json.find("\"id\":\"b.trig\",\"name\":\"Trigger\",\"index\":2,\"page\":0")
+          != std::string::npos);
+    CHECK(json.find("\"label\":\"Fire the envelope\"") != std::string::npos);
+    CHECK(json.find("\"id\":\"b.link\",\"name\":\"Stereo Link\",\"off\":0,"
+                    "\"page\":0,\"type\":\"enum\",\"zones\":3,\"def\":0")
+          != std::string::npos);
+    CHECK(json.find("\"disp\":{\"kind\":\"enum\",\"labels\":[\"Stereo\","
+                    "\"Mono\",\"Mid-Side\"]}")
+          != std::string::npos);
+    CHECK(json.find("\"anchor\":\"p0.1\"") != std::string::npos);
+    CHECK(json.find("\"anchor\":\"p1.0\"") != std::string::npos);
+    CHECK(json.find("\"btn\":{\"index\":1,\"action\":\"cycle\",")
+          != std::string::npos);
+    /* Two zones read as a toggle. */
+    CHECK(json.find("\"btn\":{\"index\":3,\"action\":\"toggle\",")
+          != std::string::npos);
+    /* Host-only state: no btn object, and no page key (global). */
+    const auto q = json.find("\"id\":\"b.quality\"");
+    CHECK(q != std::string::npos);
+    CHECK(json.find("\"btn\":", q) > json.find("}]}", q));
 
     /* Declaring a field on a non-persisted slot must fail the build. */
     {
@@ -1382,6 +1466,7 @@ static void TestDescriptorJsonValidation()
         ok &= db.Opaque("motion", sf.motion, "m");
         ok &= db.BeginSettings("settings", sf.settings);
         ok &= db.EndSettings();
+        ok &= EmitFixtureButtons(db, sf);
         ok &= db.Name("name", sf.name);
         CHECK(ok);
         CHECK_EQ(db.Finish(), 0u);

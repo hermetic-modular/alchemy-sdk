@@ -211,7 +211,6 @@ class DescriptorBuilder
     static constexpr uint8_t  kMaxPots          = 8u;
     static constexpr uint16_t kMaxFieldIds      = 192u;
     static constexpr uint8_t  kMaxRefs          = 24u;
-    static constexpr uint8_t  kMaxPosIds        = 12u;
 
     bool CheckManaged(const Serializable& s);
     void OpenComponent(const char* id, const char* kind,
@@ -220,12 +219,15 @@ class DescriptorBuilder
                       uint8_t num_pages);
     void EmitRootButtons();
 
-    bool        Fail(const char* msg);
-    bool        FailRef(const char* kind, const char* target,
-                        const char* what);
-    bool        RecordFieldId(const char* id);
-    bool        RecordRef(const char* kind, const char* target);
-    const char* PoolPositionalId(uint8_t hw);
+    bool Fail(const char* msg);
+    bool FailRef(const char* kind, const char* target, const char* what);
+    bool RecordFieldId(const char* id);
+    bool RecordRef(const char* kind, const char* target);
+
+    /** Field ids are hashed, never retained: callers may build an id in
+     *  a scratch buffer (the pager's positional "p<page>.<pot>"), so a
+     *  stored pointer would dangle by the time Finish() matched it. */
+    static uint32_t IdHash(const char* s);
 
     JsonWriter     w_;
     const Presets& presets_;
@@ -259,18 +261,17 @@ class DescriptorBuilder
     const char* root_fragments_[kMaxRootFragments] = {};
     uint8_t     num_root_fragments_                = 0u;
 
-    /* Ref validation: every emitted field id, every cross-field ref,
-     * matched in Finish().  Ids are caller-owned static strings except
-     * positional "b<hw>" ids, which are pooled here. */
+    /* Ref validation: hashes of every emitted field id, plus every
+     * cross-field ref, matched in Finish().  Ref targets come from
+     * VirtualButton, whose strings are static by contract, so those
+     * pointers are safe to hold for the error message. */
     struct Ref { const char* kind; const char* target; };
-    const char* field_ids_[kMaxFieldIds]  = {};
-    uint16_t    num_field_ids_            = 0u;
-    Ref         refs_[kMaxRefs]           = {};
-    uint8_t     num_refs_                 = 0u;
-    char        pos_ids_[kMaxPosIds][8]   = {};
-    uint8_t     num_pos_ids_              = 0u;
-    const char* err_                      = nullptr;
-    char        errbuf_[96]               = {};
+    uint32_t field_ids_[kMaxFieldIds] = {};
+    uint16_t num_field_ids_           = 0u;
+    Ref      refs_[kMaxRefs]          = {};
+    uint8_t  num_refs_                = 0u;
+    const char* err_                  = nullptr;
+    char        errbuf_[96]           = {};
 };
 
 } // namespace hostlink

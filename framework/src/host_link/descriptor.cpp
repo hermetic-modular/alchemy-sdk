@@ -78,12 +78,25 @@ bool DescriptorBuilder::FailRef(const char* kind, const char* target,
     return false;
 }
 
+/* FNV-1a: a hash collision would let one dangling ref through, never
+ * reject a good one — the safe direction for a placement hint. */
+uint32_t DescriptorBuilder::IdHash(const char* s)
+{
+    uint32_t h = 2166136261u;
+    for (; *s; ++s)
+    {
+        h ^= static_cast<uint8_t>(*s);
+        h *= 16777619u;
+    }
+    return h;
+}
+
 bool DescriptorBuilder::RecordFieldId(const char* id)
 {
     if (!id) return Fail("field id null");
     if (num_field_ids_ >= kMaxFieldIds)
         return Fail("too many fields for ref validation");
-    field_ids_[num_field_ids_++] = id;
+    field_ids_[num_field_ids_++] = IdHash(id);
     return true;
 }
 
@@ -94,16 +107,6 @@ bool DescriptorBuilder::RecordRef(const char* kind, const char* target)
     refs_[num_refs_].target = target;
     num_refs_++;
     return true;
-}
-
-/* Positional "b<hw>" ids are derived, not caller-owned — pool them so
- * the ref table can point at stable storage. */
-const char* DescriptorBuilder::PoolPositionalId(uint8_t hw)
-{
-    if (num_pos_ids_ >= kMaxPosIds) return nullptr;
-    char* slot = pos_ids_[num_pos_ids_++];
-    std::snprintf(slot, sizeof pos_ids_[0], "b%u", hw);
-    return slot;
 }
 
 void DescriptorBuilder::OpenComponent(const char* id, const char* kind,
@@ -532,8 +535,8 @@ bool DescriptorBuilder::ButtonsField(const VirtualButton& b, uint32_t off,
         return Fail("buttons: field not a dense 1-byte enum");
     buttons_next_off_++;
 
-    const char* eff = b.Ident() ? b.Ident() : PoolPositionalId(b.HwIndex());
-    if (!eff) return Fail("buttons: positional id pool exhausted");
+    char idbuf[8];
+    const char* eff = ButtonEffectiveId(b, idbuf, sizeof idbuf);
     if (!RecordFieldId(eff)) return false;
     if (b.AnchorField())
     {
@@ -811,9 +814,10 @@ uint32_t DescriptorBuilder::Finish()
      * ref may precede its target in Manage() order or follow it. */
     for (uint8_t i = 0u; i < num_refs_; i++)
     {
-        bool found = false;
+        const uint32_t want  = IdHash(refs_[i].target);
+        bool           found = false;
         for (uint16_t k = 0u; !found && k < num_field_ids_; k++)
-            found = std::strcmp(refs_[i].target, field_ids_[k]) == 0;
+            found = field_ids_[k] == want;
         if (!found) FailRef(refs_[i].kind, refs_[i].target, "names no field");
     }
 
