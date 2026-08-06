@@ -118,7 +118,7 @@ class CvMatrix : public CvSource
     /* ── CvSource ──────────────────────────────────────────────────────── */
 
     float DeltaAtPage(uint8_t page, uint8_t pot) const override;
-    void  PollEdges  (const float* cv, uint32_t t_us, bool gated) override;
+    void  PollEdges  (const float* cv, uint32_t t_us) override;
     void  Update     (const float* cv, uint32_t t_ms) override;
 
   private:

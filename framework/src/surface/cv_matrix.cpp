@@ -81,9 +81,9 @@ float CvMatrix::DeltaAtPage(uint8_t page, uint8_t pot) const
     return delta_cache_[page][pot];
 }
 
-void CvMatrix::PollEdges(const float* cv, uint32_t t_us, bool gated)
+void CvMatrix::PollEdges(const float* cv, uint32_t t_us)
 {
-    if (gated || !cv) return;
+    if (!cv) return;
     for (uint8_t i = 0; i < num_jacks_; i++)
     {
         const JackState& j = jacks_[i];

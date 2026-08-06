@@ -26,16 +26,16 @@
  *
  *   1. inner 1 ms poll loop:
  *        hw.ProcessAllControls + cv[] sampling
- *        settings.PollButtons      (gates the rest while active)
- *        cv_source.PollEdges       (sub-frame CV edge timestamps)
+ *        settings.PollButtons      (gates the button polls while active)
+ *        cv_source.PollEdges       (sub-frame CV edge timestamps; never gated)
  *        locks.PollButtons         (gated by settings)
  *        storage.PollButtons       (gated by settings)
  *        OnPoll user hook
  *   2. phys[] snapshot
  *   3. settings.Update             (always runs; B2+B3 enter gesture)
- *      locks.Advance               (always runs; playback survives Settings)
+ *      locks.Advance
+ *      cv_source.Update
  *   4. while !settings.IsActive():
- *        cv_source.Update          (refresh per-(page, pot) CV delta cache)
  *        locks.Update              (record/disarm gestures; may consume B1)
  *        storage.Update            (Pager: page-advance + pot-catch)
  *        OnPageChange hook
@@ -120,8 +120,10 @@ class ControlLoop
 
     /**
      * Attach a Settings surface. While `settings.IsActive()` returns true,
-     * ControlLoop skips perf updates (storage/locks) and the perf render
-     * path; settings owns the screen via its own Render(). The B2+B3 enter
+     * ControlLoop hands B1 and the pots to settings: the gesture surfaces
+     * (storage, locks recording) and the OnFrame hook stand down, and
+     * settings owns the screen via its own Render().  Audio, lock
+     * playback, and CV dispatch all keep running.  The B2+B3 enter
      * gesture is processed every frame regardless.
      */
     ControlLoop& Use(Settings& s)    { settings_ = &s; return *this; }
