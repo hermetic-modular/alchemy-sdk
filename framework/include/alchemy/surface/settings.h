@@ -169,6 +169,8 @@ class Settings : public Serializable
 
     /** Control kind at (page, pot); None when out of range. */
     SettingsKind KindAt(uint8_t page, uint8_t pot) const;
+    const char* NameAt(uint8_t page, uint8_t pot) const;
+    const char* const* ZoneLabelsAt(uint8_t page, uint8_t pot) const;
 
     /** Selector zone count at (page, pot); 0 for non-selectors. */
     uint8_t ZonesAt(uint8_t page, uint8_t pot) const;

@@ -55,12 +55,11 @@ class CdcUsbTransport : public IHostTransport
      * must pass FS_EXTERNAL.  V1 boards expose the onboard port:
      * FS_INTERNAL.
      *
-     * @p product_name, when non-null, replaces the USB product string
-     * ("Daisy Seed …") the OS and browser port-picker display — e.g.
-     * "Alchemy Lab".  Implemented by repointing the ST descriptor
-     * table's GetProductStrDescriptor callback before the peripheral
-     * initializes; stock libDaisy is untouched.  The pointer must stay
-     * valid for the lifetime of the link (pass a string literal).
+     * @p product_name, when non-null, sets the USB product string the
+     * OS, the browser port-picker and DAW MIDI lists display — e.g.
+     * "Alchemy Lab".  Carried by the composite device's own descriptor
+     * table (alchemy/usb).  The pointer must stay valid for the
+     * lifetime of the link (pass a string literal).
      */
     void Init(daisy::UsbHandle& usb,
               daisy::UsbHandle::UsbPeriph periph

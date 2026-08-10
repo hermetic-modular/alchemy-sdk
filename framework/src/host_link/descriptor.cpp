@@ -374,7 +374,9 @@ bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,
 
 bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
                                       const char* field_id, const char* name,
-                                      const char* disp_json)
+                                      const char* disp_json,
+                                      const char* const* labels,
+                                      uint8_t num_labels)
 {
     if (!settings_ || !fields_open_) { error_ = true; return false; }
     if (page >= kMaxSettingsPages || pot >= kMaxPots) { error_ = true; return false; }
@@ -391,12 +393,29 @@ bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
 
     if (kind == SettingsKind::Selector)
     {
+        const uint8_t zones = settings_->ZonesAt(page, pot);
         w_.Key("type");  w_.Str("enum");
-        w_.Key("zones"); w_.UInt(settings_->ZonesAt(page, pot));
+        w_.Key("zones"); w_.UInt(zones);
         w_.Key("def");   w_.UInt(settings_->SelectorIdxAt(page, pot));
         w_.Key("disp");
-        if (disp_json) w_.RawValue(disp_json);
-        else           w_.RawValue("{\"kind\":\"enum\"}");
+        if (disp_json)
+        {
+            w_.RawValue(disp_json);
+        }
+        else if (labels != nullptr && num_labels == zones && zones > 0u)
+        {
+            w_.BeginObj();
+            w_.Key("kind"); w_.Str("enum");
+            w_.Key("labels");
+            w_.BeginArr();
+            for (uint8_t i = 0; i < zones; i++) w_.Str(labels[i]);
+            w_.EndArr();
+            w_.EndObj();
+        }
+        else
+        {
+            w_.RawValue("{\"kind\":\"enum\"}");
+        }
     }
     else
     {

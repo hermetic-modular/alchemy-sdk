@@ -54,3 +54,15 @@ target_compile_definitions(hostlink_tests PRIVATE ALCHEMY_HOSTLINK_MAX_BODY=2048
 target_link_libraries(hostlink_tests PRIVATE alchemy::primitives)
 
 add_test(NAME hostlink COMMAND hostlink_tests)
+
+# Composite-USB descriptor golden + MIDI codec/tracker/service tests.
+add_executable(midi_tests
+    midi_tests.cpp
+    "${SDK_ROOT}/framework/src/usb/usb_descriptors.c"
+    "${SDK_ROOT}/framework/src/midi/mono_note_tracker.cpp"
+    "${SDK_ROOT}/framework/src/midi/poly_note_allocator.cpp"
+    "${SDK_ROOT}/framework/src/midi/usb_midi.cpp"
+)
+target_link_libraries(midi_tests PRIVATE alchemy::primitives)
+
+add_test(NAME midi COMMAND midi_tests)

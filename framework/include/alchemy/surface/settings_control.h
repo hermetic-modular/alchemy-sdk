@@ -60,6 +60,9 @@ struct SettingsSlot
 {
     SettingsKind kind = SettingsKind::None;
 
+    const char*        name        = nullptr;
+    const char* const* zone_labels = nullptr;
+
     /* Catch state — common to every kind that maps a pot to a value. */
     PotState pot = {};
 
@@ -142,6 +145,8 @@ class KnobHandle
     KnobHandle() = default;
     explicit KnobHandle(SettingsSlot* s) : s_(s) {}
 
+    KnobHandle& Name(const char* n)
+    { if (s_) s_->name = n; return *this; }
     KnobHandle& Default(float v)
     { if (!s_) return *this; s_->value = v; s_->pot.stored = v; return *this; }
     KnobHandle& Color  (LedPanel::Rgb c)
@@ -168,6 +173,8 @@ class BipolarHandle
     BipolarHandle() = default;
     explicit BipolarHandle(SettingsSlot* s) : s_(s) {}
 
+    BipolarHandle& Name(const char* n)
+    { if (s_) s_->name = n; return *this; }
     BipolarHandle& Default    (float v) /* -1..+1 */
     {
         if (!s_) return *this;
@@ -219,6 +226,10 @@ class SelectorHandle
         s_->pot.stored = IdxToPot(idx);
         return *this;
     }
+    SelectorHandle& Name(const char* n)
+    { if (s_) s_->name = n; return *this; }
+    SelectorHandle& Labels(const char* const* labels, uint8_t n)
+    { if (s_ && n == s_->num_zones) s_->zone_labels = labels; return *this; }
     SelectorHandle& Colors        (const LedPanel::Rgb* palette)
     { if (!s_) return *this; s_->zone_colors    = palette; return *this; }
     SelectorHandle& InactiveColor (LedPanel::Rgb c)

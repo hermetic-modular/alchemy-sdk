@@ -271,8 +271,11 @@ bool DescribeSettings(DescriptorBuilder& db, const Settings& st,
             else
                 std::snprintf(nm, sizeof nm, "%s", SettingsKindName(k));
 
-            ok = db.SettingsField(pg, pot, fid, nm,
-                                  nullptr /* derive from kind */);
+            const char* declared = st.NameAt(pg, pot);
+            ok = db.SettingsField(pg, pot, fid, declared ? declared : nm,
+                                  nullptr /* derive from kind */,
+                                  st.ZoneLabelsAt(pg, pot),
+                                  st.ZonesAt(pg, pot));
         }
     }
     return ok && db.EndSettings();

@@ -952,6 +952,27 @@ static void TestAutoDescribe()
     }
 }
 
+static void TestSettingsNamedFields()
+{
+    /* Declared .Name()/.Labels() on a settings slot replace the
+     * kind-derived field name and ride the enum disp — the mechanism
+     * the MIDI settings recipes use. */
+    SurfaceFixture sf;
+    static const char* kChLabels[3] = {"Omni", "1", "2"};
+    sf.settings.Page(2).Pot(0).Selector(3)
+        .Name("MIDI Channel")
+        .Labels(kChLabels, 3);
+
+    static char buf[16384];
+    const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                          sf.presets, nullptr, nullptr, 0);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+    CHECK(json.find("\"name\":\"MIDI Channel\"") != std::string::npos);
+    CHECK(json.find("{\"kind\":\"enum\",\"labels\":[\"Omni\",\"1\",\"2\"]}")
+          != std::string::npos);
+}
+
 static void TestAutoDescribeGenericAndOverrides()
 {
     RamFlash flash;
@@ -1724,6 +1745,7 @@ int main(int argc, char** argv)
     TestTornWrite();
     TestDescriptorBuilder();
     TestAutoDescribe();
+    TestSettingsNamedFields();
     TestAutoDescribeGenericAndOverrides();
     TestButtonsEmission();
     TestComponentMeta();

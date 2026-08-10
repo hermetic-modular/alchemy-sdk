@@ -132,9 +132,13 @@ class DescriptorBuilder
     bool BeginSettings(const char* id, const Settings& settings,
                        const char* const* page_names  = nullptr,
                        const char* const* page_colors = nullptr);
+    /** @p labels (Selector only): zone names for the enum disp, emitted
+     *  when @p disp_json is null and @p num_labels matches the zones. */
     bool SettingsField(uint8_t page, uint8_t pot,
                        const char* field_id, const char* name,
-                       const char* disp_json);
+                       const char* disp_json,
+                       const char* const* labels = nullptr,
+                       uint8_t num_labels        = 0u);
     bool EndSettings();
 
     /* ── Buttons (top-level, optional) ──────────────────────────────

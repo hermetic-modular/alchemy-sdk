@@ -7,30 +7,10 @@
 
 #include <cstring>
 
-#include "usbd_def.h"     /* USBD_DescriptorsTypeDef                  */
-#include "usbd_desc.h"    /* FS_Desc / HS_Desc descriptor tables      */
-#include "usbd_ctlreq.h"  /* USBD_GetString                           */
+#include "alchemy/usb/usb_device.h"
 
 namespace alchemy {
 namespace hostlink {
-
-namespace {
-
-/* Runtime product-string override: the ST USB core fetches the product
- * string through a function pointer in FS_Desc/HS_Desc — repointing it
- * before USBD_Init renames the device without touching libDaisy. */
-const char* s_product_name = nullptr;
-uint8_t     s_product_desc[2u + 2u * 48u];   /* UTF-16 string descriptor */
-
-uint8_t* ProductStrOverride(USBD_SpeedTypeDef /*speed*/, uint16_t* length)
-{
-    USBD_GetString(
-        reinterpret_cast<uint8_t*>(const_cast<char*>(s_product_name)),
-        s_product_desc, length);
-    return s_product_desc;
-}
-
-} // namespace
 
 CdcUsbTransport* CdcUsbTransport::s_instance = nullptr;
 
@@ -42,15 +22,13 @@ void CdcUsbTransport::Init(daisy::UsbHandle& usb,
     periph_    = periph;
     s_instance = this;
 
-    if (product_name != nullptr)
-    {
-        s_product_name = product_name;
-        USBD_DescriptorsTypeDef& desc =
-            (periph == daisy::UsbHandle::FS_INTERNAL) ? FS_Desc : HS_Desc;
-        desc.GetProductStrDescriptor = &ProductStrOverride;
-    }
-
-    usb.Init(periph);
+    /* Composite bring-up replaces UsbHandle::Init; the CDC function
+     * delegates to the same handlers, so the UsbHandle transmit path
+     * and receive callback below are unchanged. */
+    alchemy_usb_start(periph == daisy::UsbHandle::FS_INTERNAL
+                          ? ALCHEMY_USB_PERIPH_FS
+                          : ALCHEMY_USB_PERIPH_HS,
+                      product_name);
     usb.SetReceiveCallback(&CdcUsbTransport::RxTrampoline, periph);
 }
 

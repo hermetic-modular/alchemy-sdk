@@ -105,6 +105,48 @@ endif()
 
 endif()
 
+# ── alchemy::usb (firmware — cross-compile only) ───────────────────────────
+
+if(CMAKE_CROSSCOMPILING)
+
+add_library(alchemy_usb STATIC
+    src/usb/usb_descriptors.c
+    src/usb/usb_composite.c
+    src/usb/usb_device.c
+)
+add_library(alchemy::usb ALIAS alchemy_usb)
+
+target_include_directories(alchemy_usb PUBLIC
+    "${FRAMEWORK_INCLUDE}"
+)
+target_link_libraries(alchemy_usb PUBLIC daisy)
+
+# See __wrap_USBD_StdItfReq in usb_composite.c; the wrapper fails the
+# link if this flag is lost.
+target_link_options(alchemy_usb INTERFACE "LINKER:--wrap=USBD_StdItfReq")
+
+endif()
+
+# ── alchemy::midi (firmware — cross-compile only) ──────────────────────────
+# USB-MIDI service + mono note tracker.
+
+if(CMAKE_CROSSCOMPILING)
+
+add_library(alchemy_midi STATIC
+    src/midi/usb_midi.cpp
+    src/midi/mono_note_tracker.cpp
+    src/midi/poly_note_allocator.cpp
+)
+add_library(alchemy::midi ALIAS alchemy_midi)
+
+target_include_directories(alchemy_midi PUBLIC
+    "${FRAMEWORK_INCLUDE}"
+    "${HW_INCLUDE}"
+)
+target_link_libraries(alchemy_midi PUBLIC alchemy::usb daisy)
+
+endif()
+
 # ── alchemy::host_link (firmware — cross-compile only) ────────────────────
 # Links alchemy::surface, so it exists only where surface does; host
 # builds are board-free and exercise the protocol sources directly.
@@ -125,7 +167,7 @@ target_include_directories(alchemy_host_link PUBLIC
     "${FRAMEWORK_INCLUDE}"
     "${HW_INCLUDE}"
 )
-target_link_libraries(alchemy_host_link PUBLIC alchemy::surface)
+target_link_libraries(alchemy_host_link PUBLIC alchemy::surface alchemy::usb)
 
 endif()
 

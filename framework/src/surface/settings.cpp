@@ -618,6 +618,18 @@ SettingsKind Settings::KindAt(uint8_t page, uint8_t pot) const
     return slots_[page][pot].kind;
 }
 
+const char* Settings::NameAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return nullptr;
+    return slots_[page][pot].name;
+}
+
+const char* const* Settings::ZoneLabelsAt(uint8_t page, uint8_t pot) const
+{
+    if (page >= num_pages_ || pot >= kNumPots) return nullptr;
+    return slots_[page][pot].zone_labels;
+}
+
 uint8_t Settings::ZonesAt(uint8_t page, uint8_t pot) const
 {
     if (page >= num_pages_ || pot >= kNumPots) return 0u;
