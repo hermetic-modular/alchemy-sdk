@@ -5,6 +5,9 @@
 
 #include "alchemy/host_link/descriptor.h"
 
+#include <cstdio>
+#include <cstring>
+
 #include "alchemy/host_link/json_check.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/presets.h"
@@ -49,10 +52,60 @@ bool DescriptorBuilder::Begin(const ModuleInfo& m)
 bool DescriptorBuilder::CheckManaged(const Serializable& s)
 {
     if (presets_.ManagedAt(comp_index_) != &s)
+        return Fail("component out of Manage() order");
+    return true;
+}
+
+/* ── Failure reasons + cross-field ref validation ───────────────────── */
+
+bool DescriptorBuilder::Fail(const char* msg)
+{
+    if (!err_) err_ = msg;
+    error_ = true;
+    return false;
+}
+
+bool DescriptorBuilder::FailRef(const char* kind, const char* target,
+                                const char* what)
+{
+    if (!err_)
     {
-        error_ = true;
-        return false;
+        std::snprintf(errbuf_, sizeof errbuf_, "%s '%s' %s",
+                      kind, target, what);
+        err_ = errbuf_;
     }
+    error_ = true;
+    return false;
+}
+
+/* FNV-1a: a hash collision would let one dangling ref through, never
+ * reject a good one — the safe direction for a placement hint. */
+uint32_t DescriptorBuilder::IdHash(const char* s)
+{
+    uint32_t h = 2166136261u;
+    for (; *s; ++s)
+    {
+        h ^= static_cast<uint8_t>(*s);
+        h *= 16777619u;
+    }
+    return h;
+}
+
+bool DescriptorBuilder::RecordFieldId(const char* id)
+{
+    if (!id) return Fail("field id null");
+    if (num_field_ids_ >= kMaxFieldIds)
+        return Fail("too many fields for ref validation");
+    field_ids_[num_field_ids_++] = IdHash(id);
+    return true;
+}
+
+bool DescriptorBuilder::RecordRef(const char* kind, const char* target)
+{
+    if (num_refs_ >= kMaxRefs) return Fail("too many field refs");
+    refs_[num_refs_].kind   = kind;
+    refs_[num_refs_].target = target;
+    num_refs_++;
     return true;
 }
 
@@ -83,7 +136,7 @@ bool DescriptorBuilder::BeginPager(const char* id, const Pager& pager,
      * pages × pots × f32. */
     const uint32_t expect = static_cast<uint32_t>(pager.NumPages())
                           * pager.NumPots() * 4u;
-    if (expect != comp_size_) { error_ = true; return false; }
+    if (expect != comp_size_) return Fail("pager: size != pages*pots*f32");
 
     w_.Key("pages"); w_.UInt(pager.NumPages());
     w_.Key("pots");  w_.UInt(pager.NumPots());
@@ -121,12 +174,10 @@ bool DescriptorBuilder::PagerField(uint8_t page, uint8_t pot,
                                    const char* field_id, const char* name,
                                    const char* disp_json)
 {
-    if (!pager_ || !fields_open_) { error_ = true; return false; }
+    if (!pager_ || !fields_open_) return Fail("pager: field before BeginPager");
     if (page >= pager_->NumPages() || pot >= pager_->NumPots())
-    {
-        error_ = true;
-        return false;
-    }
+        return Fail("pager: field page/pot out of range");
+    if (!RecordFieldId(field_id)) return false;
 
     const uint32_t off =
         (static_cast<uint32_t>(page) * pager_->NumPots() + pot) * 4u;
@@ -150,14 +201,14 @@ bool DescriptorBuilder::PagerAltMap(const char* layout_from,
                                     const char* const* field_ids,
                                     size_t count)
 {
-    if (!pager_) { error_ = true; return false; }
+    if (!pager_) return Fail("pager: alt map before BeginPager");
 
     /* Bound check before any read: the id array must hold exactly one
      * entry per (page, pot).  A mismatch means the alt table drifted from
      * the pager geometry — fail the build instead of over-reading. */
     const size_t expect =
         static_cast<size_t>(pager_->NumPages()) * pager_->NumPots();
-    if (count != expect) { error_ = true; return false; }
+    if (count != expect) return Fail("pager: alt map count != pages*pots");
 
     if (fields_open_) { w_.EndArr(); fields_open_ = false; }
 
@@ -181,7 +232,7 @@ bool DescriptorBuilder::PagerAltMap(const char* layout_from,
 
 bool DescriptorBuilder::EndPager()
 {
-    if (!pager_) { error_ = true; return false; }
+    if (!pager_) return Fail("pager: End without Begin");
     if (fields_open_) { w_.EndArr(); fields_open_ = false; }
     w_.EndObj();
     cum_off_ += comp_size_;
@@ -224,7 +275,8 @@ bool DescriptorBuilder::BeginComponent(const char* id, const char* kind,
                                        const Serializable& s,
                                        const char* display_name)
 {
-    if (pager_ || settings_ || generic_open_) { error_ = true; return false; }
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("component: begin while another open");
     if (!CheckManaged(s)) return false;
 
     OpenComponent(id, kind, s);
@@ -235,7 +287,7 @@ bool DescriptorBuilder::BeginComponent(const char* id, const char* kind,
 
 bool DescriptorBuilder::ComponentGrid(uint8_t pages, uint8_t pots)
 {
-    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    if (!generic_open_ || fields_open_) return Fail("component: grid after fields");
     w_.Key("pages"); w_.UInt(pages);
     w_.Key("pots");  w_.UInt(pots);
     return !error_;
@@ -245,7 +297,7 @@ bool DescriptorBuilder::ComponentPageMeta(const char* const* names,
                                           const char* const* colors,
                                           uint8_t num_pages)
 {
-    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    if (!generic_open_ || fields_open_) return Fail("component: page meta after fields");
     EmitPageMeta(names, colors, num_pages);
     return !error_;
 }
@@ -255,7 +307,7 @@ bool DescriptorBuilder::GenericField(const char* id, const char* name,
                                      uint16_t zones, const char* disp_json,
                                      int16_t page, int16_t pot)
 {
-    if (!generic_open_) { error_ = true; return false; }
+    if (!generic_open_) return Fail("component: field before Begin");
     if (!fields_open_)
     {
         w_.Key("fields");
@@ -266,7 +318,9 @@ bool DescriptorBuilder::GenericField(const char* id, const char* name,
     /* Same bound the shaped builders enforce: a field must lie inside
      * the component's serialized bytes. */
     const uint32_t width = (type == FieldType::Enum) ? 1u : 4u;
-    if (off + width > comp_size_) { error_ = true; return false; }
+    if (off + width > comp_size_)
+        return Fail("component: field outside serialized bytes");
+    if (!RecordFieldId(id)) return false;
 
     w_.BeginObj();
     w_.Key("id");   w_.Str(id);
@@ -276,7 +330,7 @@ bool DescriptorBuilder::GenericField(const char* id, const char* name,
     if (pot  >= 0) { w_.Key("pot");  w_.UInt(static_cast<uint32_t>(pot)); }
     if (type == FieldType::Enum)
     {
-        if (zones == 0u) { error_ = true; return false; }
+        if (zones == 0u) return Fail("component: enum field needs zones");
         w_.Key("type");  w_.Str("enum");
         w_.Key("zones"); w_.UInt(zones);
         w_.Key("def");   w_.UInt(static_cast<uint32_t>(def));
@@ -296,7 +350,7 @@ bool DescriptorBuilder::GenericField(const char* id, const char* name,
 
 bool DescriptorBuilder::EndComponent()
 {
-    if (!generic_open_) { error_ = true; return false; }
+    if (!generic_open_) return Fail("component: End without Begin");
     if (fields_open_) { w_.EndArr(); fields_open_ = false; }
     w_.EndObj();
     cum_off_ += comp_size_;
@@ -310,21 +364,15 @@ bool DescriptorBuilder::GenericMeta(const char* key, const char* raw_json)
     /* Meta lives between the header and the fields array — after the
      * first Field the writer has already opened "fields":[…] and we
      * cannot inject a sibling key without producing malformed JSON. */
-    if (!generic_open_ || fields_open_) { error_ = true; return false; }
+    if (!generic_open_ || fields_open_) return Fail("component: meta after fields");
     /* Reject empty strings too — an empty raw_json emits `"<key>":`
      * with no value, which corrupts the object (subsequent siblings
      * come out with a leading comma).  Callers must pass a full JSON
      * value; there is no valid empty representation. */
     if (!key || !key[0] || !raw_json || !raw_json[0])
-    {
-        error_ = true;
-        return false;
-    }
+        return Fail("component: meta key/value empty");
     if (!ValidJsonValue(raw_json))
-    {
-        error_ = true;
-        return false;
-    }
+        return Fail("component: meta not valid JSON");
     w_.Key(key);
     w_.RawValue(raw_json);
     return !error_;
@@ -332,10 +380,244 @@ bool DescriptorBuilder::GenericMeta(const char* key, const char* raw_json)
 
 bool DescriptorBuilder::GenericMetaUInt(const char* key, uint32_t value)
 {
-    if (!generic_open_ || fields_open_) { error_ = true; return false; }
-    if (!key || !key[0]) { error_ = true; return false; }
+    if (!generic_open_ || fields_open_) return Fail("component: meta after fields");
+    if (!key || !key[0]) return Fail("component: meta key empty");
     w_.Key(key);
     w_.UInt(value);
+    return !error_;
+}
+
+/* ── Buttons component (kind "buttons") ─────────────────────────────── */
+
+bool DescriptorBuilder::BeginButtons(const char* id, const Serializable& s)
+{
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("buttons: begin while another open");
+    if (!CheckManaged(s)) return false;
+
+    OpenComponent(id, "buttons", s);
+    buttons_open_     = true;
+    buttons_next_off_ = 0u;
+    return !error_;
+}
+
+/* Effective field id: the declared Ident(), or the positional "b<hw>"
+ * fallback (must match ButtonBank's derivation). */
+static const char* ButtonEffectiveId(const VirtualButton& b, char* buf,
+                                     size_t cap)
+{
+    if (b.Ident()) return b.Ident();
+    std::snprintf(buf, cap, "b%u", b.HwIndex());
+    return buf;
+}
+
+/* Derive a host label for one gesture from the button's declaration:
+ * explicit label wins; else "Cycle LP / BP / HP" / "Toggle On / Off" /
+ * "Set <zone label>" from the zone labels; else just the verb. */
+static const char* DeriveGestureLabel(const VirtualButton& b,
+                                      const VirtualButton::Gesture& g,
+                                      char* buf, size_t cap)
+{
+    if (g.label) return g.label;
+    if (g.fn)    return "";
+
+    const bool toggle = (g.action == VirtualButton::Action::Toggle)
+                        || (g.action == VirtualButton::Action::Cycle
+                            && b.Zones() == 2u);
+
+    size_t n = 0;
+    auto append = [&](const char* s)
+    {
+        while (*s && n + 1u < cap) buf[n++] = *s++;
+    };
+
+    if (g.action == VirtualButton::Action::Set)
+    {
+        append("Set");
+        if (b.ZoneLabels() && g.set_zone < b.NumZoneLabels())
+        {
+            append(" ");
+            append(b.ZoneLabels()[g.set_zone]);
+        }
+        buf[n] = '\0';
+        return buf;
+    }
+
+    append(toggle ? "Toggle" : "Cycle");
+    if (b.ZoneLabels())
+    {
+        for (uint8_t i = 0; i < b.NumZoneLabels(); i++)
+        {
+            append(i == 0u ? " " : " / ");
+            append(b.ZoneLabels()[i]);
+        }
+    }
+    buf[n] = '\0';
+    return buf;
+}
+
+static void EmitGestureEntry(JsonWriter& w, const char* gesture,
+                             const char* label)
+{
+    w.BeginObj();
+    w.Key("gesture"); w.Str(gesture);
+    w.Key("label");   w.Str(label ? label : "");
+    w.EndObj();
+}
+
+/* The declared gestures as a JSON array: the structured tap/hold slots
+ * (labels derived when not given) plus any legacy Action() metadata. */
+static void EmitGestures(JsonWriter& w, const VirtualButton& b,
+                         bool implicit_tap)
+{
+    char buf[96];
+    w.BeginArr();
+    if (b.TapGesture().used)
+        EmitGestureEntry(w, "tap",
+                         DeriveGestureLabel(b, b.TapGesture(), buf, sizeof buf));
+    else if (implicit_tap)
+    {
+        VirtualButton::Gesture g;
+        g.used = true;
+        EmitGestureEntry(w, "tap", DeriveGestureLabel(b, g, buf, sizeof buf));
+    }
+    if (b.HoldGesture().used)
+        EmitGestureEntry(w, "hold",
+                         DeriveGestureLabel(b, b.HoldGesture(), buf, sizeof buf));
+    for (uint8_t i = 0; i < b.NumActions(); i++)
+        EmitGestureEntry(w, b.ActionGesture(i) ? b.ActionGesture(i) : "",
+                         b.ActionLabel(i));
+    w.EndArr();
+}
+
+bool DescriptorBuilder::ButtonsModal(const VirtualButton& b, int16_t page)
+{
+    /* Modal entries precede the fields array — same JSON-shape rule as
+     * GenericMeta. */
+    if (!buttons_open_ || fields_open_) return Fail("buttons: modal after fields");
+    if (!modal_open_)
+    {
+        w_.Key("modal");
+        w_.BeginArr();
+        modal_open_ = true;
+    }
+    char idbuf[8];
+    w_.BeginObj();
+    w_.Key("id");   w_.Str(ButtonEffectiveId(b, idbuf, sizeof idbuf));
+    w_.Key("name"); w_.Str(b.Name() ? b.Name() : "");
+    if (b.HasHw()) { w_.Key("index"); w_.UInt(b.HwIndex()); }
+    if (page >= 0) { w_.Key("page");  w_.UInt(static_cast<uint32_t>(page)); }
+    w_.Key("gestures");
+    EmitGestures(w_, b, false);
+    w_.EndObj();
+    return !error_;
+}
+
+bool DescriptorBuilder::ButtonsField(const VirtualButton& b, uint32_t off,
+                                     int16_t page)
+{
+    if (!buttons_open_) return Fail("buttons: field before BeginButtons");
+    if (modal_open_)
+    {
+        w_.EndArr();
+        modal_open_ = false;
+    }
+    if (!fields_open_)
+    {
+        w_.Key("fields");
+        w_.BeginArr();
+        fields_open_ = true;
+    }
+
+    /* One byte per stateful button, dense, in roster order. */
+    if (b.Zones() < 2u || off != buttons_next_off_
+        || off + 1u > comp_size_)
+        return Fail("buttons: field not a dense 1-byte enum");
+    buttons_next_off_++;
+
+    char idbuf[8];
+    const char* eff = ButtonEffectiveId(b, idbuf, sizeof idbuf);
+    if (!RecordFieldId(eff)) return false;
+    if (b.AnchorField())
+    {
+        if (std::strcmp(b.AnchorField(), eff) == 0)
+            return FailRef("anchor", b.AnchorField(), "is the field itself");
+        if (!RecordRef("anchor", b.AnchorField())) return false;
+    }
+
+    w_.BeginObj();
+    w_.Key("id");   w_.Str(eff);
+    w_.Key("name"); w_.Str(b.Name() ? b.Name() : "");
+    w_.Key("off");  w_.UInt(off);
+    if (page >= 0) { w_.Key("page"); w_.UInt(static_cast<uint32_t>(page)); }
+    w_.Key("type");  w_.Str("enum");
+    w_.Key("zones"); w_.UInt(b.Zones());
+    w_.Key("def");   w_.UInt(b.DefaultZone());
+
+    w_.Key("disp");
+    if (b.DispJson())
+    {
+        w_.RawValue(b.DispJson());
+    }
+    else if (b.ZoneLabels())
+    {
+        w_.BeginObj();
+        w_.Key("kind"); w_.Str("enum");
+        w_.Key("labels");
+        w_.BeginArr();
+        for (uint8_t i = 0; i < b.NumZoneLabels(); i++)
+            w_.Str(b.ZoneLabels()[i] ? b.ZoneLabels()[i] : "");
+        w_.EndArr();
+        w_.EndObj();
+    }
+    else
+    {
+        w_.RawValue("{\"kind\":\"enum\"}");
+    }
+
+    if (b.AnchorField()) { w_.Key("anchor"); w_.Str(b.AnchorField()); }
+
+    if (b.HasHw())
+    {
+        const bool implicit_tap = !b.TapGesture().used
+                                  && !b.HoldGesture().used;
+
+        w_.Key("btn");
+        w_.BeginObj();
+        w_.Key("index"); w_.UInt(b.HwIndex());
+
+        /* Primary action wire-name: the tap mutation (implicit Cycle
+         * reads as "toggle" on two-zone buttons).  A callback tap
+         * mutates nothing — the key is omitted. */
+        const VirtualButton::Gesture& tap = b.TapGesture();
+        if (implicit_tap || (tap.used && !tap.fn))
+        {
+            enum VirtualButton::Action act =
+                tap.used ? tap.action : VirtualButton::Action::Cycle;
+            if (act == VirtualButton::Action::Cycle && b.Zones() == 2u)
+                act = VirtualButton::Action::Toggle;
+            w_.Key("action");
+            w_.Str(VirtualButton::ActionName(act));
+        }
+        w_.Key("gestures");
+        EmitGestures(w_, b, implicit_tap);
+        w_.EndObj();
+    }
+    w_.EndObj();
+    return !error_;
+}
+
+bool DescriptorBuilder::EndButtons()
+{
+    if (!buttons_open_) return Fail("buttons: End without Begin");
+    if (modal_open_)  { w_.EndArr(); modal_open_  = false; }
+    if (fields_open_) { w_.EndArr(); fields_open_ = false; }
+    if (buttons_next_off_ != comp_size_)
+        Fail("buttons: size != stateful count");
+    w_.EndObj();
+    cum_off_ += comp_size_;
+    comp_index_++;
+    buttons_open_ = false;
     return !error_;
 }
 
@@ -364,7 +646,7 @@ bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,
             off += static_cast<uint32_t>(n);
         }
     }
-    if (off != comp_size_) { error_ = true; return false; }
+    if (off != comp_size_) return Fail("settings: size != slot walk");
 
     w_.Key("fields");
     w_.BeginArr();
@@ -376,9 +658,11 @@ bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
                                       const char* field_id, const char* name,
                                       const char* disp_json)
 {
-    if (!settings_ || !fields_open_) { error_ = true; return false; }
-    if (page >= kMaxSettingsPages || pot >= kMaxPots) { error_ = true; return false; }
-    if (offsets_[page][pot] < 0) { error_ = true; return false; }  /* not persisted */
+    if (!settings_ || !fields_open_) return Fail("settings: field before BeginSettings");
+    if (page >= kMaxSettingsPages || pot >= kMaxPots)
+        return Fail("settings: page/pot out of range");
+    if (offsets_[page][pot] < 0) return Fail("settings: slot not persisted");
+    if (!RecordFieldId(field_id)) return false;
 
     const SettingsKind kind = settings_->KindAt(page, pot);
 
@@ -430,7 +714,7 @@ bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
 
 bool DescriptorBuilder::EndSettings()
 {
-    if (!settings_) { error_ = true; return false; }
+    if (!settings_) return Fail("settings: End without Begin");
     if (fields_open_) { w_.EndArr(); fields_open_ = false; }
     w_.EndObj();
     cum_off_ += comp_size_;
@@ -443,13 +727,10 @@ bool DescriptorBuilder::EndSettings()
 
 bool DescriptorBuilder::RawRoot(const char* fragment)
 {
-    if (pager_ || settings_ || generic_open_
+    if (pager_ || settings_ || generic_open_ || buttons_open_
         || fragment == nullptr || fragment[0] == '\0'
         || num_root_fragments_ >= kMaxRootFragments)
-    {
-        error_ = true;
-        return false;
-    }
+        return Fail("root fragment invalid or too many");
     root_fragments_[num_root_fragments_++] = fragment;
     return true;
 }
@@ -458,14 +739,12 @@ bool DescriptorBuilder::RawRoot(const char* fragment)
 
 bool DescriptorBuilder::Buttons(const VirtualButton* buttons, uint8_t count)
 {
-    if (pager_ || settings_ || generic_open_)
-    {
-        error_ = true;
-        return false;
-    }
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("buttons table while component open");
     /* Passing a null pointer with a nonzero count would emit dangling
      * commas in Finish(); reject up front. */
-    if (count > 0u && !buttons) { error_ = true; return false; }
+    if (count > 0u && !buttons)
+        return Fail("buttons table null with nonzero count");
     buttons_     = buttons;
     num_buttons_ = count;
     return !error_;
@@ -473,50 +752,52 @@ bool DescriptorBuilder::Buttons(const VirtualButton* buttons, uint8_t count)
 
 /* Emit the stashed button table as a top-level "buttons":[...] array.
  * Called from Finish() between the components array close and the root
- * object close.  No-op when the caller stashed nothing. */
-static void EmitButtons(JsonWriter& w,
-                        const VirtualButton* buttons, uint8_t count)
+ * object close.  No-op when the caller stashed nothing.  Controls
+ * entries are cross-field refs — collected for the Finish() match. */
+void DescriptorBuilder::EmitRootButtons()
 {
-    if (count == 0u || buttons == nullptr) return;
-    w.Key("buttons");
-    w.BeginArr();
-    for (uint8_t i = 0; i < count; i++)
+    if (num_buttons_ == 0u || buttons_ == nullptr) return;
+    w_.Key("buttons");
+    w_.BeginArr();
+    for (uint8_t i = 0; i < num_buttons_; i++)
     {
-        const VirtualButton& b = buttons[i];
-        w.BeginObj();
-        w.Key("id");   w.Str(b.Ident() ? b.Ident() : "");
-        w.Key("name"); w.Str(b.Name()  ? b.Name()  : "");
-        w.Key("role"); w.Str(VirtualButton::RoleName(b.RoleValue()));
+        const VirtualButton& b = buttons_[i];
+        w_.BeginObj();
+        w_.Key("id");   w_.Str(b.Ident() ? b.Ident() : "");
+        w_.Key("name"); w_.Str(b.Name()  ? b.Name()  : "");
+        w_.Key("role"); w_.Str(VirtualButton::RoleName(b.RoleValue()));
 
         if (b.NumActions() > 0u)
         {
-            w.Key("actions");
-            w.BeginArr();
+            w_.Key("actions");
+            w_.BeginArr();
             for (uint8_t j = 0; j < b.NumActions(); j++)
             {
-                w.BeginObj();
-                w.Key("gesture"); w.Str(b.ActionGesture(j) ? b.ActionGesture(j) : "");
-                w.Key("label");   w.Str(b.ActionLabel  (j) ? b.ActionLabel  (j) : "");
-                w.EndObj();
+                w_.BeginObj();
+                w_.Key("gesture"); w_.Str(b.ActionGesture(j) ? b.ActionGesture(j) : "");
+                w_.Key("label");   w_.Str(b.ActionLabel  (j) ? b.ActionLabel  (j) : "");
+                w_.EndObj();
             }
-            w.EndArr();
+            w_.EndArr();
         }
         if (b.NumControls() > 0u)
         {
-            w.Key("controls");
-            w.BeginArr();
+            w_.Key("controls");
+            w_.BeginArr();
             for (uint8_t j = 0; j < b.NumControls(); j++)
             {
-                w.BeginObj();
-                w.Key("field");  w.Str(b.ControlField(j) ? b.ControlField(j) : "");
-                w.Key("action"); w.Str(VirtualButton::ActionName(b.ControlAction(j)));
-                w.EndObj();
+                const char* f = b.ControlField(j);
+                w_.BeginObj();
+                w_.Key("field");  w_.Str(f ? f : "");
+                if (f && f[0]) RecordRef("controls", f);
+                w_.Key("action"); w_.Str(VirtualButton::ActionName(b.ControlAction(j)));
+                w_.EndObj();
             }
-            w.EndArr();
+            w_.EndArr();
         }
-        w.EndObj();
+        w_.EndObj();
     }
-    w.EndArr();
+    w_.EndArr();
 }
 
 /* ── Finish ─────────────────────────────────────────────────────────── */
@@ -524,16 +805,43 @@ static void EmitButtons(JsonWriter& w,
 uint32_t DescriptorBuilder::Finish()
 {
     w_.EndArr();   /* components */
-    EmitButtons(w_, buttons_, num_buttons_);
+    EmitRootButtons();
     for (uint8_t i = 0u; i < num_root_fragments_; i++)
         w_.RawValue(root_fragments_[i]);
     w_.EndObj();   /* root */
 
+    /* Cross-field refs match against the full id table only now — a
+     * ref may precede its target in Manage() order or follow it. */
+    for (uint8_t i = 0u; i < num_refs_; i++)
+    {
+        const uint32_t want  = IdHash(refs_[i].target);
+        bool           found = false;
+        for (uint16_t k = 0u; !found && k < num_field_ids_; k++)
+            found = field_ids_[k] == want;
+        if (!found) FailRef(refs_[i].kind, refs_[i].target, "names no field");
+    }
+
     if (error_) return 0u;
-    if (comp_index_ != presets_.NumManaged()) return 0u;
-    if (cum_off_ != presets_.LiveSize()) return 0u;
-    if (!w_.Ok()) return 0u;
-    if (!ValidJsonValue(w_.Data(), w_.Length())) return 0u;
+    if (comp_index_ != presets_.NumManaged())
+    {
+        Fail("components != Manage() count");
+        return 0u;
+    }
+    if (cum_off_ != presets_.LiveSize())
+    {
+        Fail("total size drift vs Manage() layout");
+        return 0u;
+    }
+    if (!w_.Ok())
+    {
+        Fail("descriptor buffer overflow");
+        return 0u;
+    }
+    if (!ValidJsonValue(w_.Data(), w_.Length()))
+    {
+        Fail("descriptor JSON invalid");
+        return 0u;
+    }
     return static_cast<uint32_t>(w_.Length());
 }
 

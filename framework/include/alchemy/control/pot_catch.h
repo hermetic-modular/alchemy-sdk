@@ -8,13 +8,14 @@
  * (crossover catch) or lands within kCatchTolerance of it (proximity
  * catch).
  *
- * PotState and ParamLock are plain data structs; InitCatch and
+ * PotState and ParamLockSlot are plain data structs; InitCatch and
  * UpdateCatch are stateless algorithms that operate on them.  They
  * carry no hardware or application dependencies.
  */
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 namespace alchemy {
@@ -23,9 +24,6 @@ namespace alchemy {
 
 /** Proximity window: pot is caught immediately if within this distance. */
 constexpr float    kCatchTolerance             = 0.005f;
-
-/** Circular looping-automation buffer length in frames (≈4 s at 60 Hz). */
-constexpr uint16_t kParamLockBufferLen         = 256u;
 
 /** Minimum physical nudge (0..1) required to start / stop param-lock. */
 constexpr float    kParamLockGestureThreshold  = 0.03f;
@@ -47,28 +45,22 @@ struct PotState
     int   sign_at_lock = 0;
 };
 
-/* ── ParamLockSlot ────────────────────────────────────────────────────── */
 
-/**
- * Per-pot looping automation recorder / player.
- *
- * When recording, physical pot values are appended each UI tick.
- * When playing, the recorded delta (buf[play_head] - record_base) is
- * added to (stored + cv_sum) exactly like a CV modulation — the physical
- * pot and its catch state are never modified by this struct.
- *
- * This is the raw data slot.  The user-facing surface is `alchemy::ParamLock`
- * (in surface/param_lock.h), which owns an array of these.
- */
 struct ParamLockSlot
 {
     bool     active      = false;
     bool     recording   = false;
-    float    buf[kParamLockBufferLen] = {};
-    uint16_t length      = 0;
-    uint16_t play_head   = 0;
-    float    record_base = 0.0f;
+    uint16_t length      = 0;      ///< samples recorded (≤ stride)
+    uint32_t play_pos    = 0;      ///< Q16.16 play position (see above)
+    uint16_t record_base = 0;      ///< quantized pot position at arm time
+    float    rec_accum   = 0.0f;   ///< box-average accumulator (record)
+    uint16_t rec_count   = 0;      ///< frames accumulated toward next sample
 };
+
+/* The atomicity argument above requires natural alignment. */
+static_assert(offsetof(ParamLockSlot, play_pos) % alignof(uint32_t) == 0,
+              "ParamLockSlot::play_pos must be 4-byte aligned — the audio "
+              "ISR relies on its store being single-copy atomic");
 
 /* ── Algorithms ───────────────────────────────────────────────────────── */
 

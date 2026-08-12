@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include "alchemy/hardware_types.h"        /* ArcGeometry */
 #include "alchemy/led/anim_desc.h"         /* ParamSlot, ArcStyle, FillAnim */
@@ -371,6 +372,12 @@ class VirtualKnob
         labels_     = labels;
         num_labels_ = n;
         return *this;
+    }
+
+    template <size_t N>
+    VirtualKnob& Labels(const char* const (&labels)[N])
+    {
+        return Labels(labels, static_cast<uint8_t>(N));
     }
 
     /** Raw display-hint JSON (protocol §5); overrides the derived hint. */

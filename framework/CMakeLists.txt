@@ -67,6 +67,7 @@ endif()
 if(CMAKE_CROSSCOMPILING)
 
 add_library(alchemy_surface STATIC
+    src/surface/button_bank.cpp
     src/surface/pager.cpp
     src/surface/settings.cpp
     src/surface/led_render.cpp

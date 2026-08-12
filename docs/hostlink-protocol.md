@@ -296,9 +296,10 @@ the final byte is always NUL).
 
 Any other kind (the SDK emits `fields` for custom components) is
 field-bearing when it carries a `fields` array — hosts render it as a
-plain editable group labeled by the optional `name` key; its fields omit
-`page`/`pot`.  Unknown kinds **without** fields must be treated as
-opaque.
+plain editable group labeled by the optional `name` key.  Fields of
+*generic* kinds omit `page`/`pot`; a defined kind may specify its own
+field keys (`buttons` fields carry `page`, §5.5).  Unknown kinds
+**without** fields must be treated as opaque.
 
 Custom kinds may also emit per-kind metadata keys (e.g. `slots`,
 `slotSize`, `layout`) between the header and the `fields` array — hosts
@@ -333,11 +334,15 @@ key (see §8) so hosts can light up file-management UI without probing:
 
 Unknown root keys must be ignored (additive, per §6).
 
-### 5.3 Buttons
+### 5.3 Buttons (root metadata array — legacy)
 
 A module may declare its physical push buttons at the descriptor root as
-a `buttons` array (adjacent to `components`).  Buttons are metadata only
-— they are neither addressable nor mutable through the wire protocol.
+a `buttons` array (adjacent to `components`).  This is the original,
+metadata-only form; modules built on the `ButtonBank` surface emit a
+`buttons` *component* instead (§5.5), which additionally carries the
+buttons' persisted state per page.  A module uses one form or the other,
+and hosts must keep supporting both.  Root-array buttons are neither
+addressable nor mutable through the wire protocol.
 Their purpose is to let the host render meaningful chips ("what does B2
 do?  what's it currently set to?") and, for state-controlling buttons,
 back-reference the preset field(s) the button mutates so the current
@@ -428,6 +433,64 @@ knob-shaped edits, and per-lock automation is not that.  Hosts that do
 not recognize `param_locks` must fall back to the generic no-fields
 rendering (an unnamed chip) — the schema hash still guarantees
 byte-exact round-trip.
+
+### 5.5 Buttons component (`kind: "buttons"`)
+
+A module built on the `ButtonBank` surface emits its buttons as one
+component.  Stateful buttons are **ordinary editable enum fields** — one
+byte each, dense, in roster order — so a host that has never heard of
+this kind still renders them as a plain editable group and can read,
+edit, and write them through the normal blob paths.  A button-aware host
+uses the extra keys to draw each button inside its page card instead.
+
+```jsonc
+{ "id": "buttons", "kind": "buttons", "hash": 2864434397,
+  "size": 2, "off": 96,
+  "modal": [                       // momentary buttons: metadata only
+    { "id": "trig", "name": "Trigger", "index": 1, "page": 0,
+      "gestures": [ { "gesture": "tap", "label": "Fire the kick" } ] }
+  ],
+  "fields": [
+    { "id": "flt.mode", "name": "Filter", "off": 0, "page": 0,
+      "type": "enum", "zones": 3, "def": 0,
+      "disp": { "kind": "enum", "labels": ["LP", "BP", "HP"] },
+      "anchor": "flt.cutoff",
+      "btn": { "index": 2, "action": "cycle",
+               "gestures": [ { "gesture": "tap",
+                               "label": "Cycle LP / BP / HP" } ] } },
+    { "id": "osc.sub", "name": "Sub", "off": 1, "page": 1,
+      "type": "enum", "zones": 2, "def": 0,
+      "disp": { "kind": "enum" },
+      "btn": { "index": 2, "action": "toggle",
+               "gestures": [ { "gesture": "tap",
+                               "label": "Toggle" } ] } }
+  ]
+}
+```
+
+- `page` (fields and modal entries) — the page the button lives on.
+  Omitted when the button appears on several pages or is global:
+  render it on every page.
+- `anchor` — optional attachment: render this control with the named
+  field (typically its companion knob) wherever the host renders that
+  field; where the target is not shown, fall back to the page's plain
+  button group.  Targets are field ids from any component (never
+  `modal` ids); firmware validates the ref at build time, so a host
+  never sees a dangling one — but must still tolerate junk per §6.
+  May appear on fields with no `btn` (host-only state).
+- `btn` — the physical binding: `index` is the hardware button,
+  `action` the primary tap mutation (`cycle` / `toggle` / `set`), and
+  `gestures[]` labeled gestures exactly as in §5.3.  A field without
+  `btn` is host-editable state with no panel gesture.
+- `modal[]` — buttons with no persisted state (page cyclers, triggers,
+  lock recorders).  Metadata only; contributes no blob bytes.  Must
+  precede `fields` when both are present.
+
+The same physical `index` may appear in several entries with different
+`page` values — the same button does different things on different
+pages.  Hosts that do not recognize the kind must ignore `modal`,
+`anchor`, and `btn` per §6 and fall back to the generic field-bearing
+rendering; editing still works, which is the point.
 
 ## 6. Versioning rules
 

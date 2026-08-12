@@ -88,6 +88,14 @@ class DescriptorBuilder
      *  returns 0 rather than reading @p field_ids out of bounds. */
     bool PagerAltMap(const char* layout_from, const char* const* field_ids,
                      size_t count);
+
+    template <size_t N>
+    bool PagerAltMap(const char* layout_from,
+                     const char* const (&field_ids)[N])
+    {
+        return PagerAltMap(layout_from, field_ids, N);
+    }
+
     bool EndPager();
 
     /* ── Opaque component (round-trips byte-exact) ──────────────── */
@@ -137,6 +145,18 @@ class DescriptorBuilder
                        const char* disp_json);
     bool EndSettings();
 
+    /* ── Buttons component (kind "buttons", protocol §5.5) ──────────
+     * The ButtonBank surface: stateful buttons emit as ordinary 1-byte
+     * enum fields (so field-unaware hosts degrade to a plain editable
+     * group), each carrying a "btn" object with the physical index and
+     * gesture labels; momentary buttons emit into a "modal" array.
+     * Modal entries must precede the first field (same ordering rule as
+     * GenericMeta).  Offsets are validated against SerializedSize(). */
+    bool BeginButtons(const char* id, const Serializable& s);
+    bool ButtonsModal(const VirtualButton& b, int16_t page);
+    bool ButtonsField(const VirtualButton& b, uint32_t off, int16_t page);
+    bool EndButtons();
+
     /* ── Buttons (top-level, optional) ──────────────────────────────
      * A module's physical push buttons rendered as descriptor metadata
      * alongside the component list.  The array itself is emitted in
@@ -146,6 +166,12 @@ class DescriptorBuilder
      * a no-op — the key is omitted entirely, preserving descriptor
      * bytes on modules that expose no button metadata. */
     bool Buttons(const VirtualButton* buttons, uint8_t count);
+
+    template <size_t N>
+    bool Buttons(const VirtualButton (&buttons)[N])
+    {
+        return Buttons(buttons, static_cast<uint8_t>(N));
+    }
 
     /* ── Raw root fragments (top-level, optional) ───────────────────
      * Splice a `"key":value` fragment (no surrounding braces) into the
@@ -169,19 +195,39 @@ class DescriptorBuilder
 
     bool GenericMetaUInt(const char* key, uint32_t value);
 
-    /** Close all structures and validate totals.  Returns descriptor
-     *  length in bytes, or 0 if anything drifted or overflowed. */
+    /** Close all structures and validate totals — including that every
+     *  cross-field ref (a button's anchor, a root-array controls entry)
+     *  names a field some component emitted; Manage() order is
+     *  arbitrary, so neither side can check at emission time.  Returns
+     *  descriptor length in bytes, or 0 if anything failed. */
     uint32_t Finish();
 
+    /** Reason for the first failure (static text or a short formatted
+     *  message owned by the builder), or nullptr while clean. */
+    const char* LastError() const { return err_; }
+
   private:
-    static constexpr uint8_t kMaxSettingsPages = 4u;
-    static constexpr uint8_t kMaxPots          = 8u;
+    static constexpr uint8_t  kMaxSettingsPages = 4u;
+    static constexpr uint8_t  kMaxPots          = 8u;
+    static constexpr uint16_t kMaxFieldIds      = 192u;
+    static constexpr uint8_t  kMaxRefs          = 24u;
 
     bool CheckManaged(const Serializable& s);
     void OpenComponent(const char* id, const char* kind,
                        const Serializable& s);
     void EmitPageMeta(const char* const* names, const char* const* colors,
                       uint8_t num_pages);
+    void EmitRootButtons();
+
+    bool Fail(const char* msg);
+    bool FailRef(const char* kind, const char* target, const char* what);
+    bool RecordFieldId(const char* id);
+    bool RecordRef(const char* kind, const char* target);
+
+    /** Field ids are hashed, never retained: callers may build an id in
+     *  a scratch buffer (the pager's positional "p<page>.<pot>"), so a
+     *  stored pointer would dangle by the time Finish() matched it. */
+    static uint32_t IdHash(const char* s);
 
     JsonWriter     w_;
     const Presets& presets_;
@@ -196,6 +242,11 @@ class DescriptorBuilder
     bool         fields_open_  = false;
     bool         generic_open_ = false;
 
+    /* Buttons context. */
+    bool buttons_open_ = false;
+    bool modal_open_   = false;
+    uint32_t buttons_next_off_ = 0u;   /* fields must land densely in order */
+
     /* Settings context: serialized offset per (page, pot); -1 when the
      * slot persists nothing. */
     const Settings* settings_ = nullptr;
@@ -209,6 +260,18 @@ class DescriptorBuilder
     /* Raw root fragments stashed for emission during Finish(). */
     const char* root_fragments_[kMaxRootFragments] = {};
     uint8_t     num_root_fragments_                = 0u;
+
+    /* Ref validation: hashes of every emitted field id, plus every
+     * cross-field ref, matched in Finish().  Ref targets come from
+     * VirtualButton, whose strings are static by contract, so those
+     * pointers are safe to hold for the error message. */
+    struct Ref { const char* kind; const char* target; };
+    uint32_t field_ids_[kMaxFieldIds] = {};
+    uint16_t num_field_ids_           = 0u;
+    Ref      refs_[kMaxRefs]          = {};
+    uint8_t  num_refs_                = 0u;
+    const char* err_                  = nullptr;
+    char        errbuf_[96]           = {};
 };
 
 } // namespace hostlink

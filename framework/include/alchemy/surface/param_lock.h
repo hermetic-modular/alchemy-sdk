@@ -2,23 +2,28 @@
  * @file alchemy/surface/param_lock.h
  * @brief alchemy::ParamLock — opt-in looping-automation surface.
  *
- * A ParamLock surface owns an array of automation slots and the trigger
- * button's gesture state.  Each frame `Update()` advances every slot's
- * play head; `Delta(p)` reads the current modulation amount for pot p on
- * the visible page (resolved via an optional Pager) without advancing.
+ * Owns an array of automation slots and the trigger button's gesture
+ * state.  Advance() moves every slot's play head each frame; Delta(p)
+ * reads the current modulation for pot p on the visible page (resolved
+ * via an optional Pager) without advancing.
  *
  * TODO: Update to use Matthew's sparse sampling, which will be sick.
- * 
- * Two constructors, one template parameter (total slot count):
  *
- *   alchemy::ParamLock<6>  locks(hw.buttons[0]);            // unpaged, 6 slots
- *   alchemy::ParamLock<12> locks(hw.buttons[0], pager);     // paged, 12 = 2 × 6
+ * Two template parameters — how many slots, and how long each one is:
  *
- * The paged form resolves Delta(p) as `pager.Page() * pager.NumPots() + p`.
- * The unpaged form uses `p` directly.  Advance() moves all kSlots play
- * heads each frame so automation on inactive pages keeps cycling; it is
- * separate from Update() (gestures) so playback survives modes — like the
- * Settings menu — that suspend gesture handling.
+ *   alchemy::ParamLock<6>                      locks(hw.buttons[0]);
+ *   alchemy::ParamLock<6, LockLength<20>>      locks(hw.buttons[0]);
+ *   alchemy::ParamLock<12, LockLength<30, 20>> locks(hw.buttons[0], pager);
+ *
+ * Length defaults to DefaultLockLength (16 s at 30 Hz).  Both the RAM
+ * and preset-slot budgets are checked at the declaration site; see
+ * alchemy/control/lock_length.h and docs/param-locks.md.
+ *
+ * The paged form resolves Delta(p) as pager.Page() * pager.NumPots() + p,
+ * and kSlots must equal pager.NumPages() * pager.NumPots().  Advance()
+ * moves all kSlots heads so inactive pages keep cycling; it is separate
+ * from Update() (gestures) so playback survives modes — like the Settings
+ * menu — that suspend gesture handling.
  *
  * Composition at the user's read site:
  *
@@ -26,42 +31,141 @@
  *       return pager.Value(p) + locks.Delta(p) + cv.Delta(p, cv_buf, n);
  *   }
  *
- * Saving locks into a preset:
- *
- *   locks.Save(preset.locks);     // length kSlots
- *   locks.Restore(preset.locks);
+ * Saving into a preset is just presets.Manage(locks).  Save()/Restore()
+ * expose the raw bytes by hand — the only route for LockStore::RamOnly.
  */
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
-#include <cstring>
-#include "alchemy/control/pot_catch.h"
+#include "alchemy/control/lock_length.h"
 #include "alchemy/control/param_lock_manager.h"
+#include "alchemy/control/pot_catch.h"
+#include "alchemy/control/preset_capacity.h"
 #include "alchemy/hw/i_button.h"
 #include "alchemy/surface/lock_source.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/serializable.h"
 
+#define ALCHEMY_LOCK_OVERSIZE_MESSAGE                                          \
+    "ParamLock's motion arena exceeds ALCHEMY_LOCK_INLINE_RAM_LIMIT (16 KiB "  \
+    "by default). Framework statics link into DTCMRAM, which is 128 KiB "      \
+    "shared with the stack, so an arena this size must be placed "             \
+    "deliberately: declare `uint16_t ALCHEMY_SDRAM_BSS "                       \
+    "arena[Locks::kArenaSamples];`, pass `alchemy::LockArena{arena, sizeof "   \
+    "arena}` to the constructor, and call locks.Init() from main() after "     \
+    "hw.Init(). Or reduce kSlots / kSeconds / kRateHz. See "                   \
+    "ParamLock<>::kArenaBytes."
+
+#define ALCHEMY_LOCK_UNDERSIZE_MESSAGE                                         \
+    "This ParamLock configuration holds its motion arena inline "              \
+    "(kArenaBytes is within ALCHEMY_LOCK_INLINE_RAM_LIMIT), so passing a "     \
+    "LockArena would allocate the storage twice. Drop the LockArena "          \
+    "argument. If you need the arena placed outside DTCM anyway, build with "  \
+    "-DALCHEMY_LOCK_INLINE_RAM_LIMIT=0."
+
 namespace alchemy {
 
 class LedPanel;
 
-/* Schema tag for ParamLock — bump if SavedEntry layout changes. */
-inline constexpr uint32_t kParamLockSchemaTag = 0x504C4B30u; /* 'PLK0' */
+/* Schema tag for ParamLock — bump if the saved layout changes shape.
+ * 'PLK1': uint16 motion samples at a configurable rate, variable length. */
+inline constexpr uint32_t kParamLockSchemaTag = 0x504C4B31u; /* 'PLK1' */
 
-template<uint8_t kSlots>
+namespace detail {
+
+/** Conditional inline motion storage — specialised away entirely past
+ *  ALCHEMY_LOCK_INLINE_RAM_LIMIT, so an external arena never pays for a
+ *  shadow copy inside the object. */
+template<uint32_t kSamples, bool kInline>
+struct LockArenaStore;
+
+template<uint32_t kSamples>
+struct LockArenaStore<kSamples, true>
+{
+    uint16_t  data[kSamples] = {};
+    uint16_t* Ptr() { return data; }
+};
+
+template<uint32_t kSamples>
+struct LockArenaStore<kSamples, false>
+{
+    uint16_t* Ptr() { return nullptr; }
+};
+
+} // namespace detail
+
+template<uint8_t kSlots, class Len = DefaultLockLength>
 class ParamLock : public Serializable, public LockSource
 {
   public:
-    using SavedEntry = ParamLockManager::SavedEntry;
-    static constexpr uint8_t kNumSlots = kSlots;
+    /* ── Configuration ───────────────────────────────────────────────
+     * Compile-time constants — print at boot or static_assert against. */
+
+    static constexpr uint8_t   kNumSlots      = kSlots;
+    static constexpr uint16_t  kMaxSeconds    = Len::kMaxSeconds;
+    static constexpr uint16_t  kSampleRateHz  = Len::kSampleRateHz;
+    static constexpr LockStore kStorage       = Len::kStorage;
+
+    /** Motion samples reserved per slot. */
+    static constexpr uint16_t kFramesPerSlot =
+        static_cast<uint16_t>(Len::kFramesPerSlot);
+
+    /** Total motion samples across all slots (the arena length). */
+    static constexpr uint32_t kArenaSamples =
+        static_cast<uint32_t>(kSlots) * kFramesPerSlot;
+
+    /** Motion arena size in bytes. */
+    static constexpr size_t kArenaBytes =
+        static_cast<size_t>(kArenaSamples) * sizeof(uint16_t);
+
+    /** True when the arena lives inside the object (see LockArena). */
+    static constexpr bool kInlineArena =
+        (kArenaBytes <= static_cast<size_t>(ALCHEMY_LOCK_INLINE_RAM_LIMIT));
+
+    /** Bytes one slot occupies in the serialized byte form. */
+    static constexpr size_t kBytesPerSavedSlot =
+        sizeof(ParamLockSavedHeader)
+        + static_cast<size_t>(kFramesPerSlot) * sizeof(uint16_t);
+
+    /** Full serialized byte form (Save()/Restore()), regardless of policy. */
+    static constexpr size_t kSavedBytes =
+        static_cast<size_t>(kSlots) * kBytesPerSavedSlot;
+
+    /** Contribution to every preset slot — 0 for LockStore::RamOnly. */
+    static constexpr size_t kPresetBytes =
+        (kStorage == LockStore::Preset) ? kSavedBytes : size_t{0};
+
+    /** Preset-slot bytes left for every other managed component. */
+    static constexpr size_t kPresetBytesFree =
+        (kPresetBytes < kPresetBlobCapacity)
+            ? (kPresetBlobCapacity - kPresetBytes) : size_t{0};
+
+    /** Total RAM this surface costs, object and arena together. */
+    static constexpr size_t RamBytes();
+
+    /* ── Compile-time budget ─────────────────────────────────────────── */
+
+    static_assert(kSlots > 0u, "ParamLock: kSlots must be at least 1.");
+
+    static_assert(kPresetBytes <= kPresetBlobCapacity,
+        "ParamLock exceeds one preset slot (kPresetBlobCapacity, 20448 B). "
+        "The preset region is the top 640 KiB of the QSPI chip and cannot "
+        "grow. Reduce kSlots, kSeconds, or kRateHz — dropping the rate is "
+        "usually free, since a hand gesture carries nothing above ~8 Hz "
+        "(30 s x 12 slots fits at 20 Hz) — or declare the length with "
+        "LockStore::RamOnly to keep these locks out of presets entirely. "
+        "Compare ParamLock<>::kPresetBytes against alchemy::kPresetBlobCapacity.");
+
+    /* ── Construction ────────────────────────────────────────────────── */
 
     /** Unpaged form: kSlots is the pot count, Delta(p) reads slot p. */
     explicit ParamLock(IButton& trigger)
         : trigger_(&trigger), pager_(nullptr)
     {
-        mgr_.Init(slots_, kSlots, kSlots);
+        static_assert(kInlineArena, ALCHEMY_LOCK_OVERSIZE_MESSAGE);
+        Bind(arena_.Ptr(), kSlots);
     }
 
     /**
@@ -71,8 +175,42 @@ class ParamLock : public Serializable, public LockSource
     ParamLock(IButton& trigger, Pager& pgr)
         : trigger_(&trigger), pager_(&pgr)
     {
-        mgr_.Init(slots_, kSlots, pgr.NumPots());
+        static_assert(kInlineArena, ALCHEMY_LOCK_OVERSIZE_MESSAGE);
+        Bind(arena_.Ptr(), pgr.NumPots());
     }
+
+    /** Unpaged form with application-placed motion storage.  Required
+     *  past ALCHEMY_LOCK_INLINE_RAM_LIMIT; see LockArena for placement
+     *  rules.  A short arena is refused (IsReady() stays false). */
+    ParamLock(IButton& trigger, LockArena arena)
+        : trigger_(&trigger), pager_(nullptr)
+    {
+        static_assert(!kInlineArena, ALCHEMY_LOCK_UNDERSIZE_MESSAGE);
+        Bind(arena.bytes >= kArenaBytes ? arena.data : nullptr, kSlots);
+    }
+
+    /** Paged form with application-placed motion storage. */
+    ParamLock(IButton& trigger, Pager& pgr, LockArena arena)
+        : trigger_(&trigger), pager_(&pgr)
+    {
+        static_assert(!kInlineArena, ALCHEMY_LOCK_UNDERSIZE_MESSAGE);
+        Bind(arena.bytes >= kArenaBytes ? arena.data : nullptr, pgr.NumPots());
+    }
+
+    /** Clear the motion arena and every slot.  Optional for an inline
+     *  arena, REQUIRED for an external one in a NOLOAD section such as
+     *  .sdram_bss.  Call from main() after hw.Init() — never from a
+     *  static constructor. */
+    void Init()
+    {
+        mgr_.Clear();
+        mgr_.ClearArena();
+    }
+
+    /** False when an external arena was too small — the surface is inert. */
+    bool IsReady() const { return mgr_.IsReady(); }
+
+    /* ── Per-frame ───────────────────────────────────────────────────── */
 
     /**
      * Process one frame of GESTURE state: consume the trigger edges
@@ -108,6 +246,12 @@ class ParamLock : public Serializable, public LockSource
      *  mode like Settings suspends Update(). */
     void Advance() override;
 
+    /** Declare the control-frame interval, so kMaxSeconds means seconds
+     *  rather than frames.  ControlLoop calls this every frame. */
+    void SetFrameMs(uint32_t frame_ms) override { mgr_.SetFrameMs(frame_ms); }
+
+    /* ── Reads ───────────────────────────────────────────────────────── */
+
     /** Modulation delta for pot @p p on the visible page (no advance). */
     float Delta(uint8_t pot) const;
 
@@ -139,11 +283,14 @@ class ParamLock : public Serializable, public LockSource
      */
     void Render(LedPanel& panel, uint32_t t_ms) const override;
 
-    /** Serialise every slot into @p out[0..kSlots-1]. */
-    void Save(SavedEntry out[]) const { mgr_.Capture(out, kSlots, 0); }
+    /* ── Raw byte form ───────────────────────────────────────────────── */
 
-    /** Restore every slot from @p in[0..kSlots-1]. */
-    void Restore(const SavedEntry in[]) { mgr_.Restore(in, kSlots, 0); }
+    /** Serialise every slot into @p out[0..kSavedBytes-1].  Always the
+     *  full byte form, independent of the LockStore policy. */
+    void Save(uint8_t* out) const;
+
+    /** Restore every slot from @p in[0..kSavedBytes-1]. */
+    void Restore(const uint8_t* in);
 
     /** Reset every slot to its default (inactive) state. */
     void Clear() { mgr_.Clear(); }
@@ -152,50 +299,57 @@ class ParamLock : public Serializable, public LockSource
     bool IsButtonHeld() const { return mgr_.IsButtonHeld(); }
 
     /* ── Serializable ──────────────────────────────────────────────────
-     * Round-trips the full SavedEntry array; identical to the existing
-     * Save()/Restore() but exposed through the Serializable contract so
-     * Presets can manage this object directly.
-     *
-     * Staged ONE entry at a time: a SavedEntry is ~1 KiB (256-sample
-     * motion buffer), so a whole-array stack local would spike
-     * kSlots × ~1 KiB deep inside the control loop (HostLink live
-     * writes, GET_LIVE, panel save/load).  The byte stream is unchanged
-     * — same entries, same order.                                    */
+     * Full byte form under LockStore::Preset, nothing under RamOnly.
+     * Written straight through — no per-entry stack staging, which at
+     * these buffer sizes would spike the control-loop stack.          */
 
-    size_t SerializedSize() const override
-    {
-        return static_cast<size_t>(kSlots) * sizeof(SavedEntry);
-    }
+    size_t SerializedSize() const override { return kPresetBytes; }
 
     void Serialize(uint8_t* out) const override
     {
-        SavedEntry e;
-        for (uint8_t i = 0; i < kSlots; i++, out += sizeof(e))
-        {
-            mgr_.Capture(&e, 1, i);
-            std::memcpy(out, &e, sizeof(e));
-        }
+        if constexpr (kStorage == LockStore::Preset) Save(out);
+        else                                         (void)out;
     }
 
     bool Deserialize(const uint8_t* in) override
     {
-        SavedEntry e;
-        for (uint8_t i = 0; i < kSlots; i++, in += sizeof(e))
-        {
-            std::memcpy(&e, in, sizeof(e));
-            mgr_.Restore(&e, 1, i);
-        }
+        if constexpr (kStorage == LockStore::Preset) Restore(in);
+        else                                         (void)in;
         return true;
     }
 
+    /** Layout hash.  Folds in everything that changes the byte image or
+     *  its meaning — slot count, length, rate, storage policy — so a
+     *  reconfigured build sees old slots as empty, not as garbage. */
     uint32_t SchemaHash() const override
     {
         return kParamLockSchemaTag
              ^ (static_cast<uint32_t>(kSlots) << 8)
-             ^ static_cast<uint32_t>(sizeof(SavedEntry));
+             ^ (static_cast<uint32_t>(kFramesPerSlot) * 0x9E3779B1u)
+             ^ (static_cast<uint32_t>(kSampleRateHz) * 0x85EBCA6Bu)
+             ^ (static_cast<uint32_t>(kStorage) * 0xC2B2AE35u)
+             ^ static_cast<uint32_t>(kBytesPerSavedSlot);
     }
 
   private:
+    /** Shared constructor tail — binds the manager to slots + arena. */
+    void Bind(uint16_t* arena, uint8_t gesture_width)
+    {
+        LockConfig cfg;
+        cfg.slots         = slots_;
+        cfg.arena         = arena;
+        cfg.stride        = kFramesPerSlot;
+        cfg.total_slots   = kSlots;
+        cfg.gesture_width = gesture_width;
+        cfg.rate_hz       = kSampleRateHz;
+        cfg.frame_ms      = kDefaultLockFrameMs;
+        mgr_.Init(cfg);
+    }
+
+    /** Assumed control-frame interval until SetFrameMs() says otherwise.
+     *  Matches ControlLoop::kDefaultFrameMs. */
+    static constexpr uint32_t kDefaultLockFrameMs = 16u;
+
     IButton*         trigger_;
     Pager*           pager_;
     bool             prev_pressed_    = false;
@@ -204,9 +358,17 @@ class ParamLock : public Serializable, public LockSource
     ParamLockSlot    slots_[kSlots] = {};
     ParamLockManager mgr_;
 
+    detail::LockArenaStore<kArenaSamples, kInlineArena> arena_;
+
     uint8_t Offset() const { return pager_ ? pager_->Page() * pager_->NumPots() : 0u; }
     uint8_t Width()  const { return pager_ ? pager_->NumPots() : kSlots; }
 };
+
+template<uint8_t kSlots, class Len>
+constexpr size_t ParamLock<kSlots, Len>::RamBytes()
+{
+    return sizeof(ParamLock<kSlots, Len>) + (kInlineArena ? size_t{0} : kArenaBytes);
+}
 
 } // namespace alchemy
 

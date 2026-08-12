@@ -77,7 +77,10 @@ What the example demonstrates:
   paint its red-recording / green-active pips on top.
 - **ParamLock without a Pager.**  `ParamLock<6>` in its unpaged form
   records six independent loops — one per pot — that are layered into the
-  pot reads at a single composition site (`Knob()`).
+  pot reads at a single composition site (`Knob()`).  Loop length is the
+  optional second template argument (`ParamLock<6, LockLength<20>>` for
+  twenty seconds); see [docs/param-locks.md](../docs/param-locks.md) for
+  what a longer one costs.
 
 Only `ParamLock` and `LedRender` are linked — `Pager`, `Settings`,
 `Presets`, and `CvRouter` are not in the binary, because a single-page
@@ -108,6 +111,15 @@ reports "no descriptor" instead of shipping a wrong one.  Transport
 (CDC on the panel USB-C), buffers, the MCU unique id, and reboot are
 SDK defaults with fluent overrides; host commands run inside
 `ControlLoop`'s 1 ms poll, the same thread as panel gestures.
+
+Buttons ride the same declarations: a `VirtualButton` on page Alpha
+cycles the output routing (Stereo / Swapped / Mono) from B3, and the
+`ButtonBank` it lives in persists the zone in presets, paints the
+button LEDs per zone, and lands it in the browser as an editable enum
+inside the Alpha page — one declaration, no hand-written
+`Serializable`.  Page Beta reuses the same physical B3 for a phase
+toggle: one declaration per page, each with its own preset byte (see
+[docs/buttons.md](../docs/buttons.md)).
 
 The example also shows the extension points: a custom `Serializable`
 (`OutTrim`) that becomes editable in the browser by overriding

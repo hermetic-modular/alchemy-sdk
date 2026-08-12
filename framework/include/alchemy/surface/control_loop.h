@@ -29,20 +29,25 @@
  *        settings.PollButtons      (gates the button polls while active)
  *        cv_source.PollEdges       (sub-frame CV edge timestamps; never gated)
  *        locks.PollButtons         (gated by settings)
+ *        buttons.PollButtons       (gated; gestures fire here, and may
+ *                                   consume the pager's release)
  *        storage.PollButtons       (gated by settings)
  *        OnPoll user hook
  *   2. phys[] snapshot
  *   3. settings.Update             (always runs; B2+B3 enter gesture)
- *      locks.Advance
- *      cv_source.Update
+ *      locks.Advance               (always runs; playback survives Settings)
+ *      buttons.Update              (always runs; flushes deferred
+ *                                   preset-change callbacks)
+ *      cv_source.Update            (always runs; CV dispatch survives
+ *                                   Settings)
  *   4. while !settings.IsActive():
  *        locks.Update              (record/disarm gestures; may consume B1)
  *        storage.Update            (Pager: page-advance + pot-catch)
  *        OnPageChange hook
  *        OnFrame user hook
  *   5. Render: clear → (Settings if active, else: PerfRenderer pass →
- *      custom rings → overdraw → page indicator) → OnRender hook →
- *      LockSource overlay → leds.Show
+ *      custom rings → overdraw → page indicator → ButtonBank colors) →
+ *      OnRender hook → LockSource overlay → leds.Show
  */
 
 #pragma once
@@ -66,6 +71,8 @@ using AlchemyLab = AlchemyLabV2;
 class AlchemyLabV1;
 using AlchemyLab = AlchemyLabV1;
 #endif
+class ButtonBank;
+class IButton;
 class Settings;
 
 class ControlLoop
@@ -138,6 +145,15 @@ class ControlLoop
         if (num_pages_ < kMaxPages) pages_[num_pages_++] = &page;
         return *this;
     }
+
+    /**
+     * Attach a ButtonBank.  The loop wires the board's buttons and its
+     * own page list into the bank, polls gestures at 1 ms (gated by
+     * Settings like every surface), flushes deferred change callbacks
+     * each frame, and renders the bank's per-zone button colors after
+     * the page indicator (a mode color deliberately wins over the tint).
+     */
+    ControlLoop& Use(ButtonBank& bank);
 
     /**
      * Attach a host-communication service (e.g. hostlink::Host).  Polled
@@ -218,6 +234,10 @@ class ControlLoop
     CvSource*    cv_source_    = nullptr;
     Settings*    settings_     = nullptr;
     HostService* host_service_ = nullptr;
+    ButtonBank*  buttons_      = nullptr;
+
+    /* IButton refs handed to the ButtonBank (uniform across boards). */
+    IButton* btn_refs_[kNumButtons] = {};
 
     /* Attached pages (each carries its own knob list). */
     Page*   pages_[kMaxPages] = {};
