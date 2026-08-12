@@ -105,6 +105,14 @@ void Pager::LockPage(uint8_t page, const float* phys)
         InitCatch(states_[page][p], phys[p]);
 }
 
+void Pager::GoToPage(uint8_t page, const float* phys)
+{
+    if (page >= num_pages_) return;
+    page_ = page;
+    /* Same catch contract as the advance branch in Update(). */
+    LockPage(page_, phys);
+}
+
 void Pager::SetPageColor(uint8_t page, LedPanel::Rgb c)
 {
     if (page >= kMaxPages) return;

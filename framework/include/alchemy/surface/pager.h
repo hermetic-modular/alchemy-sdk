@@ -105,6 +105,28 @@ class Pager : public Serializable, public KnobStorage
     /** Lock catch on every pot of @p page (e.g. after a preset apply). */
     void LockPage(uint8_t page, const float* phys) override;
 
+    /**
+     * Jump straight to @p page, re-arming catch exactly as an advance does.
+     *
+     * The direct-addressing counterpart to the button's cyclic advance, for
+     * callers that must land on a *known* page rather than the next one — a
+     * "home" gesture, a preset that pins a page, a host command.  Catch is
+     * re-armed through `LockPage()`, so every pot on the destination page
+     * stays uncaught until the user moves through its stored value: a jump
+     * can never make a parameter leap.
+     *
+     * Out-of-range @p page is ignored.  Jumping to the page already showing
+     * still re-arms catch, so a caller driven by a *held* gesture MUST
+     * edge-trigger on the gesture forming — re-issuing this every frame of a
+     * hold would keep the pots permanently uncaught.
+     *
+     * Button-gesture state is deliberately untouched: an advance already
+     * latched from a button release this frame still applies on the next
+     * `Update()`.  If the gesture that triggered the jump also involves this
+     * pager's button, call `ConsumeButton()` alongside it.
+     */
+    void GoToPage(uint8_t page, const float* phys);
+
     /* ── Serializable ──────────────────────────────────────────────────
      * Serialises the per-(page, pot) stored values.  Catch state and
      * page index are excluded — both are re-derived against fresh phys
