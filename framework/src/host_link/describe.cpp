@@ -7,6 +7,7 @@
 
 #include <cstdio>
 
+#include "alchemy/surface/button_bank.h"
 #include "alchemy/surface/page.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/presets.h"
@@ -235,6 +236,20 @@ const char* SettingsKindName(SettingsKind k)
     }
 }
 
+bool DescribeButtons(DescriptorBuilder& db, const ButtonBank& bank,
+                     const char* id)
+{
+    bool ok = db.BeginButtons(id, bank);
+    ok      = ok && bank.Ok();   /* declaration errors latched at freeze */
+
+    for (uint8_t i = 0; ok && i < bank.NumModal(); i++)
+        ok = db.ButtonsModal(*bank.ModalAt(i), bank.ModalPage(i));
+    for (uint8_t i = 0; ok && i < bank.NumCells(); i++)
+        ok = db.ButtonsField(*bank.CellAt(i), i, bank.CellPage(i));
+
+    return ok && db.EndButtons();
+}
+
 bool DescribeSettings(DescriptorBuilder& db, const Settings& st,
                       const char* id)
 {
@@ -332,6 +347,10 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                 continue;
             case Serializable::DescKind::Name:
                 ok = db.Name("name", *s);
+                continue;
+            case Serializable::DescKind::Buttons:
+                ok = DescribeButtons(db, static_cast<const ButtonBank&>(*s),
+                                     "buttons");
                 continue;
             default:
                 break;

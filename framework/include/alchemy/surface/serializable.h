@@ -38,7 +38,7 @@ class Serializable
     /** Component archetype, used by HostLink descriptor auto-derivation
      *  to recognize the standard surfaces.  User components keep the
      *  Opaque default and may implement Describe() instead. */
-    enum class DescKind : uint8_t { Opaque, Pager, Settings, Name };
+    enum class DescKind : uint8_t { Opaque, Pager, Settings, Name, Buttons };
 
     virtual DescKind DescribeKind() const { return DescKind::Opaque; }
 

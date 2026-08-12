@@ -115,7 +115,8 @@ static Page right_page = Page(1).Knobs(r_hi_level, r_hi_freq,
 static AlchemyLab                        hw;
 static ControlLoop                       loop    (hw);
 static Pager                             pager   (hw.buttons[0], 2, kNumPots);
-static ParamLock<2 * kNumPots>           locks   (hw.buttons[0], pager);
+static ParamLock<2 * kNumPots, LockLength<30, 20>>
+                                         locks   (hw.buttons[0], pager);
 static Presets                           presets (hw.seed.qspi);
 static Settings                          settings(hw, &pager);
 static CvMatrix                          cv_matrix(kNumCvInputs);

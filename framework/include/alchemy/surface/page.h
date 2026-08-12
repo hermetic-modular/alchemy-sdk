@@ -1,14 +1,15 @@
 /**
  * @file alchemy/surface/page.h
- * @brief alchemy::Page — composable collection of VirtualKnob refs.
+ * @brief alchemy::Page — composable collection of VirtualKnob and
+ *        VirtualButton refs.
  *
- * A Page is a page index plus a list of VirtualKnob pointers. Pages do not
- * own knobs; they only reference them. The same VirtualKnob can appear on
- * multiple pages, no knob at all, or be moved between pages at runtime
- * (e.g. driven by a settings option).
+ * A Page is a page index plus lists of VirtualKnob and VirtualButton
+ * pointers. Pages own neither; they only reference them. The same knob or
+ * button can appear on multiple pages, no page at all, or be moved between
+ * pages at runtime (e.g. driven by a settings option).
  *
- * ControlLoop reads the live knob list every frame, so changes take effect
- * on the next Tick().
+ * ControlLoop (and ButtonBank) read the live lists every frame, so changes
+ * take effect on the next Tick().
  */
 
 #pragma once
@@ -18,10 +19,13 @@
 
 namespace alchemy {
 
+class VirtualButton;
+
 class Page
 {
   public:
-    static constexpr uint8_t kMaxKnobs = 8u;
+    static constexpr uint8_t kMaxKnobs   = 8u;
+    static constexpr uint8_t kMaxButtons = 4u;
 
     /** Construct a page bound to @p page_idx on whatever KnobStorage is attached. */
     explicit Page(uint8_t page_idx) : idx_(page_idx) {}
@@ -65,8 +69,45 @@ class Page
         }
     }
 
-    /** Empty the page. */
+    /** Empty the page's knob list. */
     void Clear() { count_ = 0; }
+
+    /**
+     * Append a list of VirtualButtons — the buttons active while this
+     * page is visible.  A ButtonBank attached to the same loop persists,
+     * dispatches, and describes them per page.  Overflow past kMaxButtons
+     * is silently dropped, mirroring Knobs().
+     */
+    template <typename... Rest>
+    Page& Buttons(VirtualButton& first, Rest&... rest)
+    {
+        AddButton(first);
+        (AddButton(rest), ...);
+        return *this;
+    }
+
+    /** Append one button. Idempotent: a duplicate add is a no-op. */
+    void AddButton(VirtualButton& b)
+    {
+        for (uint8_t i = 0; i < num_buttons_; i++)
+            if (buttons_[i] == &b) return;
+        if (num_buttons_ < kMaxButtons) buttons_[num_buttons_++] = &b;
+    }
+
+    /** Remove one button if present. Shifts subsequent entries down. */
+    void RemoveButton(VirtualButton& b)
+    {
+        for (uint8_t i = 0; i < num_buttons_; i++)
+        {
+            if (buttons_[i] == &b)
+            {
+                for (uint8_t j = i; j + 1u < num_buttons_; j++)
+                    buttons_[j] = buttons_[j + 1];
+                num_buttons_--;
+                return;
+            }
+        }
+    }
 
     /* ── Tab identity (optional; HostLink descriptors label and tint the
      *    web editor's page tabs from these — pass string literals) ────── */
@@ -82,6 +123,11 @@ class Page
     {
         return (i < count_) ? knobs_[i] : nullptr;
     }
+    uint8_t        NumButtons() const { return num_buttons_; }
+    VirtualButton* ButtonAt(uint8_t i) const
+    {
+        return (i < num_buttons_) ? buttons_[i] : nullptr;
+    }
     const char*  TabName () const { return name_; }
     const char*  TabColor() const { return color_; }
 
@@ -91,6 +137,9 @@ class Page
     const char*  name_          = nullptr;
     const char*  color_         = nullptr;
     VirtualKnob* knobs_[kMaxKnobs] = {};
+
+    VirtualButton* buttons_[kMaxButtons] = {};
+    uint8_t        num_buttons_          = 0;
 };
 
 } // namespace alchemy

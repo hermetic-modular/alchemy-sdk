@@ -15,9 +15,10 @@
  * Slot-level schema gating: every slot is stamped with the XOR of every
  * managed component's SchemaHash().  On Load, a mismatch is treated as
  * an empty slot rather than risking a misaligned restore.  This means
- * adding/removing a managed component, or resizing one (e.g. moving
- * from ParamLock<6> to ParamLock<12>) invalidates existing slots — they
- * disappear instead of corrupting your state.
+ * adding/removing a managed component, or reshaping one (e.g. moving
+ * from ParamLock<6> to ParamLock<12>, or lengthening its locks from 4 s
+ * to 20 s) invalidates existing slots — they disappear instead of
+ * corrupting your state.
  *
  * App extras: if you have state outside the standard surfaces, derive
  * a tiny struct from alchemy::Serializable that wraps it, and Manage()
@@ -28,6 +29,7 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "alchemy/control/preset_capacity.h"  /* kPresetBlobCapacity */
 #include "alchemy/control/preset_store.h"
 #include "alchemy/hw/alchemy_lab_layout.h"  /* PresetFlashOps, kPresetFlashBase, etc. */
 #include "alchemy/surface/preset_name.h"
@@ -37,20 +39,19 @@ namespace daisy { class QSPIHandle; }
 
 namespace alchemy {
 
-/* ── Flash blob sizing ───────────────────────────────────────────────── */
-
-/**
- * Bytes available per slot for the concatenated managed-component payload.
+/* ── Flash blob sizing ───────────────────────────────────────────────────
  *
- * Computed from the Alchemy Lab preset region constants minus the on-flash
- * record header (20 B) and our own blob preamble (8 B).  In practice a
- * full Pager + ParamLock<16> + Settings load uses ~17 KiB; we cap a few
- * KiB below the physical maximum to leave room for future surfaces.
- *
+ * kPresetBlobCapacity lives in control/preset_capacity.h so components can
+ * budget against it without pulling in daisy_seed.h (ParamLock does, at
+ * its declaration site).  That header owns the payload arithmetic; the
+ * board layout owns the flash geometry.  Prove here that they agree —
+ * a board whose sector geometry ever changes must break the build, not
+ * silently shift every component's budget out from under it.
  */
-constexpr size_t kPresetBlobCapacity =
-    static_cast<size_t>(kPresetSectorSize) * kPresetSectorsPerSide
-    - 32u;  /* RecordHeader (20) + blob preamble (8) + 4-byte safety margin */
+static_assert(kPresetCapacitySectorSize == kPresetSectorSize
+              && kPresetCapacitySectorsPerSide == kPresetSectorsPerSide,
+              "alchemy/control/preset_capacity.h is out of sync with this "
+              "board's preset flash geometry — update it to match.");  /* RecordHeader (20) + blob preamble (8) + 4-byte safety margin */
 
 /** Maximum number of Serializables that can be registered via Manage(). */
 constexpr uint8_t kPresetMaxManaged = 8u;
@@ -131,6 +132,28 @@ class Presets
 
     /** Serialized size of the managed set. */
     size_t LiveSize() const { return ManagedSize(); }
+
+    /* ── Payload budget ─────────────────────────────────────────────
+     *
+     * Save() has always refused an oversized managed set by returning
+     * false, which is easy to miss on the bench — the preset simply
+     * never appears.  These make the budget inspectable *before* the
+     * first save, so an application can report it at boot.
+     *
+     * The dominant contributor is normally ParamLock, which additionally
+     * static_asserts its own configuration against kPresetBlobCapacity at
+     * the declaration site.  That catches "impossible on its own"; this
+     * catches "doesn't fit alongside everything else you manage".
+     */
+
+    /** Bytes the managed set writes into a preset slot. */
+    size_t PayloadBytes() const { return ManagedSize(); }
+
+    /** Bytes available per slot (kPresetBlobCapacity). */
+    static constexpr size_t Capacity() { return kPresetBlobCapacity; }
+
+    /** False when the managed set cannot fit — Save() will always fail. */
+    bool FitsInSlot() const { return ManagedSize() <= kPresetBlobCapacity; }
 
     /** Serialize every managed component into @p out (≤ @p cap bytes).
      *  Returns bytes written, or 0 if cap is too small. */
