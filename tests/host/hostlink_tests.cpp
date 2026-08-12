@@ -840,8 +840,10 @@ static void TestDescriptorBuilder()
     }
 
     /* A settings surface WITHOUT UsePresets must not emit a gestures
-     * key at all — the array exists only when gesture pots exist. */
-    CHECK(json.find("\"gestures\"") == std::string::npos);
+     * key at all — the array exists only when gesture pots exist.  The
+     * probe is shape-scoped ("gestures":[{"page") because buttons
+     * legitimately emit a gestures key of their own per chip. */
+    CHECK(json.find("\"gestures\":[{\"page\"") == std::string::npos);
 }
 
 /* UsePresets marks two pots as gesture-owned.  They persist no bytes, so
