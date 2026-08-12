@@ -31,13 +31,16 @@
 #include "alchemy/surface/page.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/param_lock.h"
+#include "alchemy/surface/button_bank.h"
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
 #include "alchemy/surface/virtual_button.h"
 #include "alchemy/surface/virtual_knob.h"
 
+#include "button_tests.h"
 #include "fs_tests.h"
+#include "param_lock_tests.h"
 
 using namespace alchemy;
 using namespace alchemy::hostlink;
@@ -679,6 +682,18 @@ static void TestTornWrite()
 
 /* ── Descriptor builder against real surfaces ──────────────────────── */
 
+/* Button roster for the fixture: every §5.5 shape a host must render —
+ * one hardware button doing different jobs on two pages, an anchored
+ * control, a global toggle, host-only state, and momentary entries. */
+static const char* const kLinkZones[3]  = {"Stereo", "Mono", "Mid-Side"};
+static const char* const kRouteZones[3] = {"Pre", "Post", "Off"};
+static const char* const kFiltZones[3]  = {"LP", "BP", "HP"};
+static const char* const kBypassZones[2] = {"Active", "Bypassed"};
+static const char* const kQualityZones[2] = {"Standard", "High"};
+
+/* Bare literal 0 is ctor-ambiguous by design; boards use kButtonB1. */
+constexpr uint8_t kBtnB1 = 0, kBtnB2 = 1, kBtnB3 = 2, kBtnB4 = 3;
+
 struct SurfaceFixture
 {
     RamFlash    flash;
@@ -688,11 +703,36 @@ struct SurfaceFixture
     PresetName  name;
     Presets     presets{g_dummy_qspi};
     TestComp<2> motion{0x33333333u};     /* stands in for ParamLock */
+    ButtonBank  buttons;
 
     SelectorHandle mode;
     KnobHandle     knob;
     BrightnessHandle bright;
     BipolarHandle  bip;
+
+    /* B2 is Stereo Link on page 0 and Dist Routing on page 1; B3 fires
+     * a trigger on page 0 and cycles the filter on page 1. */
+    VirtualButton link  = VirtualButton(kBtnB2, "Stereo Link")
+                              .Ident("b.link").Selector(kLinkZones);
+    VirtualButton route = VirtualButton(kBtnB2, "Dist Routing")
+                              .Ident("b.route").Selector(kRouteZones)
+                              .Anchor("p0.1");
+    VirtualButton filt  = VirtualButton(kBtnB3, "Filter Mode")
+                              .Ident("b.filt").Selector(kFiltZones)
+                              .Default(1).Anchor("p1.0");
+    VirtualButton bypass = VirtualButton(kBtnB4, "Bypass")
+                               .Ident("b.bypass").Selector(kBypassZones);
+    VirtualButton quality = VirtualButton("b.quality", "Render Quality")
+                                .Selector(kQualityZones);
+    VirtualButton trig  = VirtualButton(kBtnB3, "Trigger")
+                              .Ident("b.trig")
+                              .Tap(+[](void*) {}, "Fire the envelope");
+    VirtualButton pgbtn = VirtualButton(kBtnB1, "Page")
+                              .Ident("b.page")
+                              .Tap(+[](void*) {}, "Next Page");
+
+    Page btn_page_a{0};
+    Page btn_page_b{1};
 
     SurfaceFixture()
     {
@@ -702,9 +742,17 @@ struct SurfaceFixture
                          .Range(0.05f, 0.35f).Default(0.2f);
         bip    = settings.Page(3).Pot(2).Bipolar().Default(1.0f);
 
+        btn_page_a.Buttons(link, trig);
+        btn_page_b.Buttons(route, filt);
+        buttons.Pages(btn_page_a, btn_page_b);
+        buttons.Global(bypass);
+        buttons.Global(quality);
+        buttons.Global(pgbtn);
+
         presets.Manage(pager);
         presets.Manage(motion);
         presets.Manage(settings);
+        presets.Manage(buttons);
         presets.Manage(name);            /* last: offsets stay stable */
         presets.Init(flash.Ops(), flash.Base());
 
@@ -719,6 +767,18 @@ static const char* const kAltIds[18] = {
     "b0", "b1", "b2", "b3", "b4", "b5",
     "e0", "e1", "e2", "e3", "e4", "e5",
 };
+
+/* The fixture's buttons component, in roster order — modal entries
+ * first, then one dense byte per stateful button (protocol §5.5). */
+static bool EmitFixtureButtons(DescriptorBuilder& db, SurfaceFixture& sf)
+{
+    bool ok = db.BeginButtons("buttons", sf.buttons);
+    for (uint8_t i = 0; ok && i < sf.buttons.NumModal(); i++)
+        ok &= db.ButtonsModal(*sf.buttons.ModalAt(i), sf.buttons.ModalPage(i));
+    for (uint8_t i = 0; ok && i < sf.buttons.NumCells(); i++)
+        ok &= db.ButtonsField(*sf.buttons.CellAt(i), i, sf.buttons.CellPage(i));
+    return ok && db.EndButtons();
+}
 
 static std::string BuildTestDescriptor(SurfaceFixture& sf, bool& ok)
 {
@@ -756,6 +816,7 @@ static std::string BuildTestDescriptor(SurfaceFixture& sf, bool& ok)
     ok &= db.SettingsField(1, 0, "s.bright", "Brightness", nullptr);
     ok &= db.SettingsField(3, 2, "s.atten", "Atten 3", nullptr);
     ok &= db.EndSettings();
+    ok &= EmitFixtureButtons(db, sf);
     ok &= db.Name("name", sf.name);
     const uint32_t len = db.Finish();
     ok &= (len > 0);
@@ -800,9 +861,34 @@ static void TestDescriptorBuilder()
 
     /* Settings component size must equal its SerializedSize (13). */
     CHECK_EQ(sf.settings.SerializedSize(), size_t(13));
-    /* Total size = 72 + 8 + 13 + 24 (name) = 117. */
-    CHECK(json.find("\"size\":117") != std::string::npos);
+    /* Total size = 72 + 8 + 13 + 5 (buttons) + 24 (name) = 122. */
+    CHECK(json.find("\"size\":122") != std::string::npos);
     CHECK(json.find("\"id\":\"name\",\"kind\":\"name\"") != std::string::npos);
+
+    /* Buttons (§5.5): one dense byte per stateful button, modal first.
+     * B2 is Stereo Link on page 0 and Dist Routing on page 1; the
+     * anchors name pager fields in an earlier component. */
+    CHECK(json.find("\"kind\":\"buttons\",\"hash\":") != std::string::npos);
+    CHECK(json.find("\"id\":\"b.trig\",\"name\":\"Trigger\",\"index\":2,\"page\":0")
+          != std::string::npos);
+    CHECK(json.find("\"label\":\"Fire the envelope\"") != std::string::npos);
+    CHECK(json.find("\"id\":\"b.link\",\"name\":\"Stereo Link\",\"off\":0,"
+                    "\"page\":0,\"type\":\"enum\",\"zones\":3,\"def\":0")
+          != std::string::npos);
+    CHECK(json.find("\"disp\":{\"kind\":\"enum\",\"labels\":[\"Stereo\","
+                    "\"Mono\",\"Mid-Side\"]}")
+          != std::string::npos);
+    CHECK(json.find("\"anchor\":\"p0.1\"") != std::string::npos);
+    CHECK(json.find("\"anchor\":\"p1.0\"") != std::string::npos);
+    CHECK(json.find("\"btn\":{\"index\":1,\"action\":\"cycle\",")
+          != std::string::npos);
+    /* Two zones read as a toggle. */
+    CHECK(json.find("\"btn\":{\"index\":3,\"action\":\"toggle\",")
+          != std::string::npos);
+    /* Host-only state: no btn object, and no page key (global). */
+    const auto q = json.find("\"id\":\"b.quality\"");
+    CHECK(q != std::string::npos);
+    CHECK(json.find("\"btn\":", q) > json.find("}]}", q));
 
     /* Declaring a field on a non-persisted slot must fail the build. */
     {
@@ -1101,9 +1187,24 @@ static void TestAutoDescribeGenericAndOverrides()
 
 static void TestButtonsEmission()
 {
-    RamFlash    flash;
-    Presets     presets{g_dummy_qspi};
-    TestComp<2> comp{0x77777777u};
+    /* Controls refs must resolve against emitted fields (Finish()
+     * validates them), so the fixture self-describes the two targets. */
+    struct ModeComp : TestComp<2>
+    {
+        ModeComp() : TestComp<2>(0x77777777u) {}
+        bool Describe(ComponentWriter& w) const override
+        {
+            bool ok = w.Field("mode.source", "Source", 0, FieldType::Enum,
+                              0.f, "{\"kind\":\"enum\"}", 3);
+            ok &= w.Field("mode.sub", "Sub", 1, FieldType::Enum, 0.f,
+                          "{\"kind\":\"enum\"}", 2);
+            return ok;
+        }
+    };
+
+    RamFlash flash;
+    Presets  presets{g_dummy_qspi};
+    ModeComp comp;
     presets.Manage(comp);
     presets.Init(flash.Ops(), flash.Base());
 
@@ -1421,6 +1522,7 @@ static void TestDescriptorJsonValidation()
         ok &= db.Opaque("motion", sf.motion, "m");
         ok &= db.BeginSettings("settings", sf.settings);
         ok &= db.EndSettings();
+        ok &= EmitFixtureButtons(db, sf);
         ok &= db.Name("name", sf.name);
         CHECK(ok);
         CHECK_EQ(db.Finish(), 0u);
@@ -1454,102 +1556,6 @@ static void TestUseNames()
     CHECK(p2.ManagedAt(2)->DescribeKind() == Serializable::DescKind::Name);
     CHECK_EQ(p1.LiveSchemaHash(), p2.LiveSchemaHash());
     CHECK_EQ(p1.LiveSize(), p2.LiveSize());
-}
-
-/* ParamLock's Serializable path stages one ~1 KiB SavedEntry at a time
- * (not the whole array on the stack); the byte stream must stay exactly
- * the flat SavedEntry array Restore→Capture reproduces. */
-static void TestParamLockSerializeRoundTrip()
-{
-    struct FakeButton : IButton
-    {
-        bool  Pressed() const override { return false; }
-        bool  RisingEdge() override { return false; }
-        bool  FallingEdge() override { return false; }
-        float TimeHeldMs() const override { return 0.0f; }
-    } button;
-
-    ParamLock<4> locks(button);
-    using Entry = ParamLock<4>::SavedEntry;
-    CHECK_EQ(locks.SerializedSize(), size_t{4} * sizeof(Entry));
-
-    /* Craft an image: slots 0 and 2 active with distinct ramps (zero-
-     * padded past `length`, exactly as Capture emits), slots 1 and 3
-     * inactive (all zeros). */
-    std::vector<uint8_t> image(locks.SerializedSize(), 0u);
-    {
-        Entry e{};
-        e.active      = 1u;
-        e.length      = 5u;
-        e.record_base = 0.25f;
-        for (uint16_t j = 0; j < e.length; j++)
-            e.buf[j] = 0.01f * static_cast<float>(j + 1);
-        std::memcpy(image.data(), &e, sizeof(e));
-    }
-    {
-        Entry e{};
-        e.active      = 1u;
-        e.length      = kParamLockBufferLen; /* full motion buffer */
-        e.record_base = -1.0f;
-        for (uint16_t j = 0; j < e.length; j++)
-            e.buf[j] = (j & 1u) ? 0.5f : -0.5f;
-        std::memcpy(image.data() + 2u * sizeof(Entry), &e, sizeof(e));
-    }
-
-    CHECK(locks.Deserialize(image.data()));
-
-    std::vector<uint8_t> out(locks.SerializedSize(), 0xAAu);
-    locks.Serialize(out.data());
-    CHECK(out == image);
-}
-
-/* Playback lives in Advance(), not Update(): Update() only consumes
- * gesture edges, so ControlLoop can keep automation running (Advance
- * every frame) while Settings suspends the gesture path (Update). */
-static void TestParamLockAdvanceSplit()
-{
-    struct FakeButton : IButton
-    {
-        bool  Pressed() const override { return false; }
-        bool  RisingEdge() override { return false; }
-        bool  FallingEdge() override { return false; }
-        float TimeHeldMs() const override { return 0.0f; }
-    } button;
-
-    ParamLock<4> locks(button);
-    using Entry = ParamLock<4>::SavedEntry;
-
-    /* Slot 0: active 3-sample loop around record_base 0.5. */
-    std::vector<uint8_t> image(locks.SerializedSize(), 0u);
-    Entry e{};
-    e.active      = 1u;
-    e.length      = 3u;
-    e.record_base = 0.5f;
-    e.buf[0]      = 0.6f;
-    e.buf[1]      = 0.7f;
-    e.buf[2]      = 0.9f;
-    std::memcpy(image.data(), &e, sizeof(e));
-    CHECK(locks.Deserialize(image.data()));
-
-    const float phys[4] = {};
-    CHECK(locks.Delta(0) == 0.6f - 0.5f);
-
-    /* Update() with no pending edges must not move the play head. */
-    locks.Update(phys, 0u);
-    locks.Update(phys, 1u);
-    CHECK(locks.Delta(0) == 0.6f - 0.5f);
-
-    /* Advance() steps the loop — including through the LockSource base,
-     * which is how ControlLoop drives it. */
-    locks.Advance();
-    CHECK(locks.Delta(0) == 0.7f - 0.5f);
-    static_cast<LockSource&>(locks).Advance();
-    CHECK(locks.Delta(0) == 0.9f - 0.5f);
-    locks.Advance();
-    CHECK(locks.Delta(0) == 0.6f - 0.5f); /* wrapped */
-
-    /* Inactive slots are unaffected either way. */
-    CHECK(locks.Delta(1) == 0.0f);
 }
 
 /* ── Golden vector emission ────────────────────────────────────────── */
@@ -1862,11 +1868,11 @@ int main(int argc, char** argv)
     TestJsonCheck();
     TestDescriptorJsonValidation();
     TestUseNames();
-    TestParamLockSerializeRoundTrip();
-    TestParamLockAdvanceSplit();
     TestSettingsLoadCanonicalization();
     TestPagerGoToPage();
 
+    RunParamLockTests(g_checks, g_failures);
+    RunButtonTests(g_checks, g_failures);
     RunFsTests(g_checks, g_failures);
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

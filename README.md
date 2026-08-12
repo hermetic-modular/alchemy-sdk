@@ -137,6 +137,11 @@ USB CDC serial, **while the module runs normally.** Protocol spec:
 
 In practice, this is what allows you to connect to the preset manager in hermeticmodular.com
 
+Buttons that carry state (mode cycles, toggles) get the same treatment
+as knobs — declared once as a `VirtualButton`, persisted and
+host-editable through a `ButtonBank`: see
+[`docs/buttons.md`](docs/buttons.md).
+
 The clearest way to dive in is to review the example in [`hostlink.cpp`](examples/hostlink/hostlink.cpp) 
 
 It builds directly on the existing `Presets` / `Serializable` machinery,

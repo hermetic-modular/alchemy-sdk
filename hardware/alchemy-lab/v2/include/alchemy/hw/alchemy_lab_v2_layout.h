@@ -39,6 +39,22 @@ constexpr daisy::Pin kPotPins[kNumPots] = {
 
 constexpr bool kPotPolarityFlipped = true;
 
+/*
+ * Pot indices by panel position (front view): two columns of three,
+ * odd-numbered pots down the left, even down the right, B1/B2/B3
+ * beside the top/middle/bottom rows.
+ *
+ *      [P1] B1 [P2]
+ *      [P3] B2 [P4]
+ *      [P5] B3 [P6]
+ */
+constexpr uint8_t kPotTopLeft     = 0u;
+constexpr uint8_t kPotTopRight    = 1u;
+constexpr uint8_t kPotMiddleLeft  = 2u;
+constexpr uint8_t kPotMiddleRight = 3u;
+constexpr uint8_t kPotBottomLeft  = 4u;
+constexpr uint8_t kPotBottomRight = 5u;
+
 /* ========================================================================= */
 /*  CV inputs (6 jacks, ADC1, ±5 V hardware-scaled to 0–3.3 V)                */
 /* ========================================================================= */

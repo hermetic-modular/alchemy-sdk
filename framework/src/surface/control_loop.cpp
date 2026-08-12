@@ -5,6 +5,7 @@
 
 #include "alchemy/surface/control_loop.h"
 #include "alchemy/hw/alchemy_lab.h"
+#include "alchemy/surface/button_bank.h"
 #include "alchemy/surface/settings.h"
 #include "daisy_seed.h"
 
@@ -16,6 +17,15 @@ ControlLoop::ControlLoop(AlchemyLab& hw, uint32_t frame_ms, uint32_t poll_ms)
       poll_ms_(poll_ms ? poll_ms : 1u),
       renderer_(hw.Arc())
 {
+}
+
+ControlLoop& ControlLoop::Use(ButtonBank& bank)
+{
+    buttons_ = &bank;
+    for (uint8_t i = 0; i < kNumButtons; i++) btn_refs_[i] = &hw_->buttons[i];
+    bank.Attach(btn_refs_, kNumButtons);
+    bank.AttachPageSource(this);
+    return *this;
 }
 
 void ControlLoop::WireKnobs()
@@ -41,18 +51,9 @@ void ControlLoop::Tick()
      * — just three pointer assigns per knob — and removes a class of bugs
      * where a knob moves between pages but the loop still has stale refs. */
     WireKnobs();
+    if (buttons_) buttons_->AttachStorage(storage_);
 
     const uint32_t now = daisy::System::GetNow();
-
-    /* ── Inner poll: 1 ms cadence for button-edge detection + CV sampling.
-     *    Every button-touching surface participates: Settings gates the
-     *    perf surfaces while active so locks/storage don't see B1 edges
-     *    that belong to settings page nav.
-     *
-     *    CV is sampled before CvSource::PollEdges so the source sees the
-     *    freshest readings.  PollEdges runs gated like the button polls
-     *    so a settings-mode user doesn't accidentally fire a tap-tempo
-     *    edge while navigating settings pages. */
     for (uint32_t elapsed = 0u; elapsed < frame_ms_; elapsed += poll_ms_)
     {
         hw_->ProcessAllControls();
@@ -62,8 +63,11 @@ void ControlLoop::Tick()
 
         if (settings_) settings_->PollButtons(t_ms);
         const bool gated = settings_ && settings_->IsActive();
-        if (cv_source_) cv_source_->PollEdges(cv_, daisy::System::GetUs(), gated);
+        if (cv_source_) cv_source_->PollEdges(cv_, daisy::System::GetUs());
         if (locks_)   locks_  ->PollButtons(t_ms, gated);
+        if (buttons_)
+            buttons_->PollButtons(t_ms, gated,
+                                  storage_ ? storage_->ActivePage() : 0u);
         if (storage_) storage_->PollButtons(t_ms, gated);
         if (host_service_) host_service_->Poll(t_ms);
         if (on_poll_) on_poll_(t_ms);
@@ -74,28 +78,30 @@ void ControlLoop::Tick()
     /* ── Snapshot physical pot positions for this frame. */
     for (uint8_t p = 0; p < num_pots_; p++) phys_[p] = hw_->pots[p].Value();
 
-    /* ── Settings runs every frame so the B2+B3 enter gesture is always live.
-     *    While active, perf surfaces and the user OnFrame hook stand down. */
+    /* ── Settings runs every frame so the B2+B3 enter gesture is always live. */
     if (settings_) settings_->Update(phys_, now);
     const bool in_settings = settings_ && settings_->IsActive();
 
     /* ── Lock playback advances every frame, unconditionally: recorded
      *    modulation must keep running while Settings owns the surface.
      *    Only the gesture half (locks_->Update below) stands down. */
-    if (locks_) locks_->Advance();
+    if (locks_)
+    {
+        locks_->SetFrameMs(frame_ms_);
+        locks_->Advance();
+    }
+
+    /* Deferred button-change callbacks run every frame, unconditionally:
+     * a host preset push must reach the app's Bind targets even while
+     * Settings owns the surface (data application is not a gesture). */
+    if (buttons_) buttons_->Update(now);
+
+    /* CV dispatch likewise runs unconditionally: patched CV keeps
+     * modulating the app while Settings owns the surface. */
+    if (cv_source_) cv_source_->Update(cv_, now);
 
     if (!in_settings)
     {
-        /* ── Surface updates in canonical order: cv_source first (refreshes
-         *    its delta cache from the per-frame cv[] snapshot), then locks
-         *    before storage so consume-button semantics land in the same
-         *    frame as the release.
-         *
-         *    Known gap, same principle as locks: gating cv_source_->Update
-         *    here freezes the CV delta cache while Settings is active.
-         *    Splitting its refresh out of the gesture path is a separate
-         *    change — see LockSource::Advance for the pattern. */
-        if (cv_source_) cv_source_->Update(cv_, now);
         if (locks_)   locks_  ->Update(phys_, now);
         if (storage_) storage_->Update(phys_, now);
 
@@ -193,6 +199,12 @@ void ControlLoop::Render(uint32_t t_ms)
             if (c.r || c.g || c.b) hw_->leds.SetButtonPair(0, c);
         }
     }
+
+    /* Button-state colors paint after the page indicator: a declared
+     * mode color deliberately wins over the page tint. */
+    if (buttons_)
+        buttons_->Render(hw_->leds,
+                         storage_ ? storage_->ActivePage() : 0u, t_ms);
 
     /* Global OnRender hook fires before the LockSource overlay so the
      * overlay always sits on top of anything the user paints. */

@@ -12,10 +12,9 @@
  * When a CvSource is attached:
  *   - VirtualKnob.Norm() / .Value() consult `source->DeltaAtPage(page, pot)`
  *     instead of the static binding for every knob the loop wired.
- *   - ControlLoop calls `PollEdges(cv, t_us, gated)` from the 1 ms inner
- *     poll loop (sub-frame edge timestamps).
- *   - ControlLoop calls `Update(cv, t_ms)` once per frame, in canonical
- *     order (before LockSource and KnobStorage).
+ *   - ControlLoop calls `PollEdges(cv, t_us)` from the 1 ms inner poll
+ *     loop (sub-frame edge timestamps).
+ *   - ControlLoop calls `Update(cv, t_ms)` once per frame
  *
  * The interface is intentionally symmetric with LockSource — the two
  * surfaces compose at the read site as
@@ -48,14 +47,10 @@ class CvSource
      * inner poll loop with the current cv[] snapshot and a microsecond
      * timestamp for sub-frame accuracy on clock-tap / gate destinations.
      *
-     * When @p gated is true (e.g. Settings is active), implementations
-     * should sync internal previous-state but not fire actions.
-     *
      * Default: no-op.
      */
     virtual void  PollEdges(const float* /*cv*/,
-                            uint32_t     /*t_us*/,
-                            bool         /*gated*/) {}
+                            uint32_t     /*t_us*/) {}
 
     /**
      * Process one control-loop frame.  Implementations recompute their

@@ -131,6 +131,12 @@ class Host : public HostService
      */
     Host& Buttons(const VirtualButton* buttons, uint8_t count);
 
+    template <size_t N>
+    Host& Buttons(const VirtualButton (&buttons)[N])
+    {
+        return Buttons(buttons, static_cast<uint8_t>(N));
+    }
+
     /**
      * Attach a protocol extension (see extension.h) — e.g. the SD
      * filesystem block.  Registered with the engine at Start(); an

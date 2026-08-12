@@ -70,7 +70,10 @@ class Pager : public Serializable, public KnobStorage
      * B1+B2 combination).  See `Update()` for the required call order:
      * consumers must run before the pager.
      */
-    void ConsumeButton();
+    void ConsumeButton() override;
+
+    /** The page-advance button, for consume-handshake identity checks. */
+    const IButton* PageButton() const override { return b1_; }
 
     uint8_t Page()        const { return page_; }
     uint8_t NumPages()    const override { return num_pages_; }
