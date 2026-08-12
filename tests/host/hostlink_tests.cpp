@@ -838,6 +838,60 @@ static void TestDescriptorBuilder()
         db.EndPager();
         CHECK_EQ(db.Finish(), 0u);
     }
+
+    /* A settings surface WITHOUT UsePresets must not emit a gestures
+     * key at all — the array exists only when gesture pots exist. */
+    CHECK(json.find("\"gestures\"") == std::string::npos);
+}
+
+/* UsePresets marks two pots as gesture-owned.  They persist no bytes, so
+ * they can never be SettingsFields — the descriptor must still surface
+ * them (display-only "gestures" entries) so a host can mirror the panel
+ * instead of rendering the preset pots as unexplained gaps. */
+static void TestSettingsGesturesEmission()
+{
+    RamFlash   flash;
+    AlchemyLab hw;
+    Pager      pager{hw.buttons[0], 3, 6};
+    Settings   settings{hw, &pager};
+    Presets    presets{g_dummy_qspi};
+
+    auto mode = settings.Page(0).Pot(0).Selector(4).Default(1);
+    auto gain = settings.Page(0).Pot(5).Knob().Default(0.5f);
+    settings.UsePresets(presets);        /* claims page 0, pots 2 + 3 */
+    presets.Manage(settings);
+    presets.Init(flash.Ops(), flash.Base());
+
+    static char buf[8192];
+    DescriptorBuilder db(buf, sizeof buf, presets);
+    bool ok = db.Begin({"gestmod", "Gestures", "0.0.1", "gitg", "0.1.0", "v1"});
+    ok &= db.BeginSettings("settings", settings);
+    ok &= db.SettingsField(0, 0, "s.mode", "Mode", nullptr);
+    ok &= db.SettingsField(0, 5, "s.gain", "Gain", nullptr);
+    /* Gesture pots are not fields — declaring one must fail the build
+     * (checked on a scratch builder so the real one stays clean). */
+    {
+        static char buf2[8192];
+        DescriptorBuilder db2(buf2, sizeof buf2, presets);
+        db2.Begin({"x", "x", "1", "g", "s", "v1"});
+        db2.BeginSettings("settings", settings);
+        CHECK(!db2.SettingsField(0, 2, "bad", "Bad", nullptr));
+    }
+    ok &= db.EndSettings();
+    const uint32_t len = db.Finish();
+    CHECK(ok);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* Both gesture pots, page-major order, SDK-authored names. */
+    CHECK(json.find("\"gestures\":["
+                    "{\"page\":0,\"pot\":2,\"name\":\"Preset Slot\"},"
+                    "{\"page\":0,\"pot\":3,\"name\":\"Save / Load\"}]")
+          != std::string::npos);
+    /* Emitted on the settings component, before its fields array. */
+    CHECK(json.find("\"gestures\":") < json.find("\"fields\":"));
+
+    (void)mode; (void)gain;
 }
 
 /* ── Descriptor auto-derivation (describe.h) ───────────────────────── */
@@ -1798,6 +1852,7 @@ int main(int argc, char** argv)
     }
     TestTornWrite();
     TestDescriptorBuilder();
+    TestSettingsGesturesEmission();
     TestAutoDescribe();
     TestAutoDescribeGenericAndOverrides();
     TestButtonsEmission();

@@ -351,6 +351,38 @@ bool DescriptorBuilder::BeginSettings(const char* id, const Settings& settings,
     OpenComponent(id, "settings", settings);
     EmitPageMeta(page_names, page_colors, settings.NumPages());
 
+    /* Gesture-owned pots (the UsePresets save/load surface) persist no
+     * bytes, so they can never be SettingsFields — but they ARE part of
+     * the panel the user sees.  Emit them as display-only metadata so a
+     * host can mirror the module's settings pages exactly instead of
+     * rendering the preset pots as unexplained gaps.  Hosts that predate
+     * the key ignore it (unknown keys are tolerated by protocol rule). */
+    bool gestures_open = false;
+    for (uint8_t pg = 0; pg < settings.NumPages() && pg < kMaxSettingsPages; pg++)
+    {
+        for (uint8_t p = 0; p < kMaxPots; p++)
+        {
+            const SettingsKind k = settings.KindAt(pg, p);
+            const char* gname =
+                (k == SettingsKind::PresetSlotPot)   ? "Preset Slot"
+              : (k == SettingsKind::PresetActionPot) ? "Save / Load"
+                                                     : nullptr;
+            if (!gname) continue;
+            if (!gestures_open)
+            {
+                w_.Key("gestures");
+                w_.BeginArr();
+                gestures_open = true;
+            }
+            w_.BeginObj();
+            w_.Key("page"); w_.UInt(pg);
+            w_.Key("pot");  w_.UInt(p);
+            w_.Key("name"); w_.Str(gname);
+            w_.EndObj();
+        }
+    }
+    if (gestures_open) w_.EndArr();
+
     /* Walk (page, pot) in the exact Serialize() order, accumulating the
      * per-slot byte offsets.  The final total must equal the component's
      * own SerializedSize() — the strongest drift guard available. */

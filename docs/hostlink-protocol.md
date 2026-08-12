@@ -287,6 +287,15 @@ host's page tabs.  An empty-string entry means "no label for this page" —
 the host falls back to a generic label (colors likewise).  Colors are CSS
 hex strings; hosts must validate before use and ignore malformed values.
 
+`gestures` is optional on `settings` components: an array of
+`{ "page", "pot", "name" }` entries marking pots that belong to an
+on-device gesture rather than a persisted field (the SDK emits the
+`UsePresets` save/load pots as `"Preset Slot"` / `"Save / Load"`).
+Nothing is stored behind a gesture pot — the entry exists so a host can
+mirror the module's settings pages exactly, labeling those positions
+instead of rendering them as unexplained gaps.  Hosts that predate the
+key ignore it.
+
 Component `kind`s: `pager` and `settings` are field-bearing; `opaque`
 round-trips byte-exact and is shown as a summary chip (e.g. "Motion
 recording · clear"); `name` is a fixed NUL-padded UTF-8 buffer holding
