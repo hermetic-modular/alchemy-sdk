@@ -32,6 +32,7 @@
  *        buttons.PollButtons       (gated; gestures fire here, and may
  *                                   consume the pager's release)
  *        storage.PollButtons       (gated by settings)
+ *        clip.Tick                 (clip-light detection; never gated)
  *        OnPoll user hook
  *   2. phys[] snapshot
  *   3. settings.Update             (always runs; B2+B3 enter gesture)
@@ -46,14 +47,15 @@
  *        OnPageChange hook
  *        OnFrame user hook
  *   5. Render: clear → (Settings if active, else: PerfRenderer pass →
- *      custom rings → overdraw → page indicator → ButtonBank colors) →
- *      OnRender hook → LockSource overlay → leds.Show
+ *      custom rings → overdraw → page indicator → ButtonBank colors →
+ *      clip light) → OnRender hook → LockSource overlay → leds.Show
  */
 
 #pragma once
 
 #include <cstdint>
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots, kNumCvInputs */
+#include "alchemy/led/anims/clip_indicator.h"
 #include "alchemy/led/perf_renderer.h"
 #include "alchemy/surface/cv_source.h"
 #include "alchemy/surface/host_service.h"
@@ -154,6 +156,8 @@ class ControlLoop
      * the page indicator (a mode color deliberately wins over the tint).
      */
     ControlLoop& Use(ButtonBank& bank);
+     /* Attach a ClipIndicator. */
+    ControlLoop& Use(ClipIndicator& c) { clip_ = &c; return *this; }
 
     /**
      * Attach a host-communication service (e.g. hostlink::Host).  Polled
@@ -229,12 +233,13 @@ class ControlLoop
     uint8_t num_cv_             = kNumCvInputs;
 
     /* Attached surfaces. */
-    KnobStorage* storage_      = nullptr;
-    LockSource*  locks_        = nullptr;
-    CvSource*    cv_source_    = nullptr;
-    Settings*    settings_     = nullptr;
-    HostService* host_service_ = nullptr;
-    ButtonBank*  buttons_      = nullptr;
+    KnobStorage*   storage_      = nullptr;
+    LockSource*    locks_        = nullptr;
+    CvSource*      cv_source_    = nullptr;
+    Settings*      settings_     = nullptr;
+    HostService*   host_service_ = nullptr;
+    ButtonBank*    buttons_      = nullptr;
+    ClipIndicator* clip_         = nullptr;
 
     /* IButton refs handed to the ButtonBank (uniform across boards). */
     IButton* btn_refs_[kNumButtons] = {};

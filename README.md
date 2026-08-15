@@ -26,6 +26,17 @@ Supported boards:
 
 <img src="media/hero.jpg" alt="Hero Hardware" width="600">
 
+## Documentation
+
+**The full narrative documentation lives on the Hermetic Modular website. Start
+there: [hermeticmodular.com/docs](https://hermeticmodular.com/docs)**
+
+It's a walkthrough of the whole SDK, Quickstart,
+Fundamentals, the control surfaces (knobs, buttons, pages, jacks,
+presets, settings), firmware anatomy, LED animations, etc.
+
+[<img src="https://hermeticmodular.com/og/docs/og-docs-index.jpg" alt="Alchemy SDK Documentation card over a rack of Hermetic Modular Eurorack modules" width="600">](https://hermeticmodular.com/docs)
+
 ## Beta notice and Community discussion
 
 The Alchemy SDK is in beta.  APIs, surface names, and on-disk preset

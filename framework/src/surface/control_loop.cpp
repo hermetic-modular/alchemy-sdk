@@ -70,6 +70,7 @@ void ControlLoop::Tick()
                                   storage_ ? storage_->ActivePage() : 0u);
         if (storage_) storage_->PollButtons(t_ms, gated);
         if (host_service_) host_service_->Poll(t_ms);
+        if (clip_) clip_->Tick(static_cast<float>(poll_ms_));
         if (on_poll_) on_poll_(t_ms);
 
         daisy::System::Delay(poll_ms_);
@@ -205,6 +206,8 @@ void ControlLoop::Render(uint32_t t_ms)
     if (buttons_)
         buttons_->Render(hw_->leds,
                          storage_ ? storage_->ActivePage() : 0u, t_ms);
+
+    if (clip_) clip_->Draw(hw_->leds);
 
     /* Global OnRender hook fires before the LockSource overlay so the
      * overlay always sits on top of anything the user paints. */
