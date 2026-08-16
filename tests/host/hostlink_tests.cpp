@@ -32,6 +32,8 @@
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/param_lock.h"
 #include "alchemy/surface/button_bank.h"
+#include "alchemy/surface/jack.h"
+#include "alchemy/surface/manual.h"
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
@@ -1183,6 +1185,154 @@ static void TestAutoDescribeGenericAndOverrides()
     }
 }
 
+/* ── Manual layer: help / SeeAlso / jacks / manual block ──────────── */
+
+static void TestManualEmission()
+{
+    SurfaceFixture sf;
+    sf.settings.Page(0).Name("Setup").Help("Setup page help.");
+
+    static const char* kModeLabels[4] = {"A", "B", "C", "D"};
+    sf.mode.Ident("set.mode").Name("Mode Select").Labels(kModeLabels)
+           .Help("Selects the mode.");
+
+    static Jack in_l = Jack("IN_L", "In L", JackSig::AudioIn);
+    static Jack in_r = Jack("IN_R", "In R", JackSig::AudioIn).Normalled(in_l);
+    static Jack clk  = Jack("J8", "CLK", JackSig::Trig)
+                           .Short("CLK")
+                           .Help("External clock input.");
+    static const Jack kJacks[3] = {in_l, in_r, clk};
+
+    VirtualKnob cutoff = VirtualKnob(0, "Cutoff")
+                             .Exp(20.f, 12000.f)
+                             .Ident("flt.cutoff")
+                             .Help("Filter cutoff. **Sweep** it.")
+                             .SeeAlso(in_r, "presets");
+    /* Pot 2: the fixture's route button anchors positional "p0.1", so
+     * pots 0/1 must keep their positional ids. */
+    VirtualKnob drive = VirtualKnob(2, "Drive").Ident("drv");
+    drive.SeeAlso(cutoff, sf.mode, clk);
+
+    Page p0 = Page(0).Name("Time").Help("Page zero help.");
+    p0.Knobs(cutoff, drive);
+    const Page*   refs[1] = {&p0};
+    const PageSet pages{refs, 1};
+
+    /* Root-array button: free-form gesture key, per-gesture help. */
+    static VirtualButton kRootBtns[1] = {
+        VirtualButton("bx", "Extra")
+            .Action("Long Press", "Panic + reinit")
+            .Help("The rescue button.")
+            .GestureHelp("Long Press", "Held for a second.")};
+    kRootBtns[0].SeeAlso(clk);
+
+    /* Bank button: structured tap slot keys as "tap". */
+    sf.trig.Help("Fires the voice.").GestureHelp("tap", "Fires once.");
+
+    static const Manual kManual = Manual()
+                                      .Tagline("Test tagline")
+                                      .Preamble("**Preamble.**")
+                                      .Section("flow", "Signal Flow", "Body text.");
+
+    static char buf[32768];
+    const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                          sf.presets, &pages, nullptr, 0,
+                                          kRootBtns, 1, nullptr, 0,
+                                          kJacks, 3, &kManual);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* Wiring only: every manual emission path produced its key.  No
+     * content, ordering, or adjacency pins — text is free to change. */
+    static const char* kKeys[] = {
+        "\"tagline\":", "\"pageHelp\":", "\"help\":", "\"see\":",
+        "\"jacks\":",   "\"sig\":",      "\"norm\":", "\"short\":",
+        "\"manual\":",  "\"preamble\":", "\"sections\":", "\"presets\":",
+    };
+    for (const char* k : kKeys)
+        CHECK(json.find(k) != std::string::npos);
+}
+
+static void TestManualValidation()
+{
+    /* SeeAlso → knob without Ident() fails the build. */
+    {
+        SurfaceFixture sf;
+        VirtualKnob a = VirtualKnob(0, "A").Ident("a");
+        VirtualKnob b = VirtualKnob(1, "B"); /* no ident */
+        a.SeeAlso(b);
+        Page p0{0};
+        p0.Knobs(a, b);
+        const Page*   refs[1] = {&p0};
+        const PageSet pages{refs, 1};
+        static char buf[16384];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, sf.presets,
+                                  &pages, nullptr, 0),
+                 0u);
+    }
+    /* Dangling raw see id fails at Finish(). */
+    {
+        SurfaceFixture sf;
+        VirtualKnob a = VirtualKnob(0, "A").Ident("a").SeeAlso("no.such");
+        Page p0{0};
+        p0.Knobs(a);
+        const Page*   refs[1] = {&p0};
+        const PageSet pages{refs, 1};
+        static char buf[16384];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, sf.presets,
+                                  &pages, nullptr, 0),
+                 0u);
+    }
+    /* GestureHelp key matching no declared gesture fails. */
+    {
+        SurfaceFixture sf;
+        static VirtualButton kBad[1] = {
+            VirtualButton("bx", "X")
+                .Action("Tap", "Fire")
+                .GestureHelp("Tp", "typo'd key")};
+        static char buf[16384];
+        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, sf.presets,
+                                  nullptr, nullptr, 0, kBad, 1),
+                 0u);
+    }
+}
+
+static void TestManualHashStability()
+{
+    SurfaceFixture sf;
+    static char b1[16384], b2[32768];
+    const uint32_t len1 = RenderDescriptor(b1, sizeof b1, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0);
+    CHECK(len1 > 0u);
+    const uint32_t hash_before = sf.presets.LiveSchemaHash();
+
+    /* Decorate everything decoratable; state shape untouched. */
+    static const char* kL[4] = {"A", "B", "C", "D"};
+    sf.mode.Ident("set.mode").Name("Mode").Labels(kL).Help("Mode help.");
+    sf.bright.Help("Bright help.");
+    sf.bip.Ident("set.bip").Help("Bip help.");
+    sf.settings.Page(0).Help("Page help.");
+    sf.trig.Help("Trig help.").GestureHelp("tap", "Tap help.");
+
+    static const Manual kManual =
+        Manual().Tagline("T").Preamble("P").Section("s", "S", "B");
+    const uint32_t len2 = RenderDescriptor(b2, sizeof b2, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0,
+                                           nullptr, 0, nullptr, 0,
+                                           nullptr, 0, &kManual);
+    CHECK(len2 > len1);
+    CHECK_EQ(sf.presets.LiveSchemaHash(), hash_before);
+
+    /* The emitted schemaHash and every component hash are byte-identical:
+     * prose lives only in the descriptor, never in any SchemaHash(). */
+    const std::string j1(b1, len1), j2(b2, len2);
+    const size_t h1 = j1.find("\"schemaHash\":");
+    const size_t h2 = j2.find("\"schemaHash\":");
+    CHECK(h1 != std::string::npos && h2 != std::string::npos);
+    CHECK(j1.substr(h1, j1.find(',', h1) - h1)
+          == j2.substr(h2, j2.find(',', h2) - h2));
+}
+
 /* ── Buttons + custom-component meta ──────────────────────────────── */
 
 static void TestButtonsEmission()
@@ -1863,6 +2013,9 @@ int main(int argc, char** argv)
     TestSettingsGesturesEmission();
     TestAutoDescribe();
     TestAutoDescribeGenericAndOverrides();
+    TestManualEmission();
+    TestManualValidation();
+    TestManualHashStability();
     TestButtonsEmission();
     TestComponentMeta();
     TestJsonCheck();

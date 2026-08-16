@@ -40,6 +40,8 @@ class Page;
 class Presets;
 class Serializable;
 class VirtualButton;
+class Jack;
+class Manual;
 
 namespace hostlink {
 
@@ -66,8 +68,11 @@ struct PageSet
  * @p buttons, and @p root_fragments are optional (pass nullptr / 0).
  * Buttons become the top-level "buttons" array (protocol §5.3); root
  * fragments are `"key":value` splices merged into the root object
- * (§5.2, e.g. the storage advertisement).  Returns the descriptor
- * length, or 0 on any drift, overflow, or describer failure.
+ * (§5.2, e.g. the storage advertisement).  @p jacks becomes the root
+ * "jacks" array; @p manual the root "manual" block — the auto path
+ * always emits the manual block (stock preset help at minimum), and a
+ * manual tagline rides into module{}.  Returns the descriptor length,
+ * or 0 on any drift, overflow, or describer failure.
  */
 uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescriptorBuilder::ModuleInfo& info,
@@ -78,7 +83,10 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const VirtualButton* buttons = nullptr,
                           uint8_t num_buttons = 0u,
                           const char* const* root_fragments = nullptr,
-                          uint8_t num_root_fragments = 0u);
+                          uint8_t num_root_fragments = 0u,
+                          const Jack* jacks = nullptr,
+                          uint8_t num_jacks = 0u,
+                          const Manual* manual = nullptr);
 
 } // namespace hostlink
 } // namespace alchemy

@@ -71,7 +71,9 @@ class ComponentWriter
     /** One field at byte offset @p off; see DescriptorBuilder::GenericField. */
     bool Field(const char* id, const char* name, uint32_t off,
                FieldType type, float def, const char* disp_json = nullptr,
-               uint16_t zones = 0u, int16_t page = -1, int16_t pot = -1);
+               uint16_t zones = 0u, int16_t page = -1, int16_t pot = -1,
+               const char* help = nullptr,
+               const SeeRef* see = nullptr, uint8_t num_see = 0u);
 
     /**
      * Emit `,"<key>":<raw_json>` inside the component object, between the
@@ -86,6 +88,9 @@ class ComponentWriter
     bool Meta(const char* key, const char* raw_json);
 
     bool MetaUInt(const char* key, uint32_t value);
+
+    /** String meta, JSON-escaped (component-level "help"). */
+    bool MetaStr(const char* key, const char* value);
 
     /* ── Renderer interface ─────────────────────────────────────────── */
 

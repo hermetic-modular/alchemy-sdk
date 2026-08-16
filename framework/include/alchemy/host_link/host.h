@@ -57,6 +57,8 @@
 namespace alchemy {
 
 class ControlLoop;
+class Jack;
+class Manual;
 class Page;
 class Presets;
 class VirtualButton;
@@ -87,7 +89,7 @@ class Host : public HostService
      *  @p cap must be ≥ the module's live serialized size. */
     Host& Buffers(uint8_t* staging, uint8_t* snapshot, size_t cap);
 
-    /** Custom descriptor buffer (default: SDK-owned 8 KiB in SDRAM). */
+    /** Custom descriptor buffer (default: SDK-owned 24 KiB in SDRAM). */
     Host& DescriptorBuffer(char* buf, size_t cap);
 
     /** Custom byte transport (default: CDC on the panel USB-C). */
@@ -136,6 +138,20 @@ class Host : public HostService
     {
         return Buttons(buttons, static_cast<uint8_t>(N));
     }
+
+    /** Declare the module's jacks (root "jacks" array).  Same lifetime
+     *  rule as Buttons(). */
+    Host& Jacks(const Jack* jacks, uint8_t count);
+
+    template <size_t N>
+    Host& Jacks(const Jack (&jacks)[N])
+    {
+        return Jacks(jacks, static_cast<uint8_t>(N));
+    }
+
+    /** Attach module-level manual content (tagline / preamble / sections).
+     *  Without it the descriptor still carries the stock preset help. */
+    Host& Attach(const Manual& manual);
 
     /**
      * Attach a protocol extension (see extension.h) — e.g. the SD
@@ -200,6 +216,9 @@ class Host : public HostService
 
     const VirtualButton* buttons_       = nullptr;
     uint8_t              num_buttons_   = 0u;
+    const Jack*          jacks_         = nullptr;
+    uint8_t              num_jacks_     = 0u;
+    const Manual*        manual_        = nullptr;
 
     IHostlinkExtension* extensions_[HostLink::kMaxExtensions] = {};
     uint8_t             num_extensions_                       = 0u;

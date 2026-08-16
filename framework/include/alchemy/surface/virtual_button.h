@@ -51,6 +51,7 @@
 #include <cstdint>
 
 #include "alchemy/led/panel.h"   /* LedPanel::Rgb */
+#include "alchemy/surface/see_ref.h"
 
 namespace alchemy {
 
@@ -89,6 +90,7 @@ class VirtualButton
         uint8_t     set_zone = 0;
         uint16_t    hold_ms  = 0;
         const char* label    = nullptr;
+        const char* help     = nullptr;   /* manual prose; descriptor-only */
         TapFn       fn       = nullptr;
         void*       fn_ctx   = nullptr;
     };
@@ -334,6 +336,48 @@ class VirtualButton
         return *this;
     }
 
+    /* ── Manual prose ─────────────────────────────────────────────────
+     * GestureHelp keys on the gesture string: Action()'s free-form name,
+     * or "tap"/"hold" for the structured slots.  An unmatched key fails
+     * the descriptor build — text must never silently vanish. */
+
+    constexpr VirtualButton& Help(const char* md)
+    {
+        help_ = md;
+        return *this;
+    }
+
+    template <typename... Refs>
+    constexpr VirtualButton& SeeAlso(const Refs&... refs)
+    {
+        (AddSee(SeeRef(refs)), ...);
+        return *this;
+    }
+
+    constexpr VirtualButton& GestureHelp(const char* key, const char* md)
+    {
+        if (StrEq(key, "tap") && tap_.used)
+        {
+            tap_.help = md;
+            return *this;
+        }
+        if (StrEq(key, "hold") && hold_.used)
+        {
+            hold_.help = md;
+            return *this;
+        }
+        for (uint8_t i = 0; i < num_actions_; i++)
+        {
+            if (actions_[i].gesture && StrEq(key, actions_[i].gesture))
+            {
+                actions_[i].help = md;
+                return *this;
+            }
+        }
+        bad_gesture_help_ = key;   /* latched; fails the descriptor build */
+        return *this;
+    }
+
     /* ── Reads (ISR-safe; state lives in the ButtonBank) ─────────────── */
 
     /** Current zone (Default() until a bank adopts this button). */
@@ -354,6 +398,14 @@ class VirtualButton
     constexpr uint8_t     NumActions() const { return num_actions_; }
     constexpr const char* ActionGesture(uint8_t i) const { return actions_[i].gesture; }
     constexpr const char* ActionLabel  (uint8_t i) const { return actions_[i].label;   }
+    constexpr const char* ActionHelp   (uint8_t i) const { return actions_[i].help;    }
+
+    constexpr const char*   ManualHelp() const { return help_; }
+    constexpr const SeeRef* SeeRefs()    const { return see_; }
+    constexpr uint8_t       NumSeeRefs() const { return num_see_; }
+    constexpr bool          SeeOverflowed() const { return see_overflow_; }
+    /** Unmatched GestureHelp key, or nullptr — checked at descriptor build. */
+    constexpr const char*   BadGestureHelpKey() const { return bad_gesture_help_; }
 
     constexpr uint8_t     NumControls() const { return num_controls_; }
     constexpr const char* ControlField (uint8_t i) const { return controls_[i].field;  }
@@ -424,7 +476,21 @@ class VirtualButton
         return (ms > 0xFFFFu) ? 0xFFFFu : static_cast<uint16_t>(ms);
     }
 
-    struct ActionEntry  { const char* gesture = nullptr; const char* label = nullptr; };
+    static constexpr bool StrEq(const char* a, const char* b)
+    {
+        if (!a || !b) return false;
+        while (*a && *a == *b) { ++a; ++b; }
+        return *a == *b;
+    }
+
+    constexpr void AddSee(const SeeRef& r)
+    {
+        if (num_see_ < kMaxSeeRefs) see_[num_see_++] = r;
+        else                        see_overflow_ = true;
+    }
+
+    struct ActionEntry  { const char* gesture = nullptr; const char* label = nullptr;
+                          const char* help    = nullptr; };
     struct ControlEntry { const char* field   = nullptr; enum Action action = Action::Cycle; };
 
     const char*  ident_;
@@ -460,6 +526,13 @@ class VirtualButton
     /* Host metadata. */
     const char* anchor_ = nullptr;
     const char* disp_ = nullptr;
+
+    /* Manual prose (descriptor-only, never hashed). */
+    const char* help_             = nullptr;
+    const char* bad_gesture_help_ = nullptr;
+    SeeRef      see_[kMaxSeeRefs] = {};
+    uint8_t     num_see_          = 0;
+    bool        see_overflow_     = false;
 
     /* Wiring (set by ButtonBank). */
     const uint8_t* zone_ptr_    = nullptr;

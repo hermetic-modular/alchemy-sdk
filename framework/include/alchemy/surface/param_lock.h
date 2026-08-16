@@ -100,6 +100,10 @@ template<uint8_t kSlots, class Len = DefaultLockLength>
 class ParamLock : public Serializable, public LockSource
 {
   public:
+    /** Locks help override (default: stock_help::kLocks). */
+    ParamLock& Help(const char* md) { help_ = md; return *this; }
+    const char* ManualHelp() const { return help_; }
+
     /* ── Configuration ───────────────────────────────────────────────
      * Compile-time constants — print at boot or static_assert against. */
 
@@ -332,6 +336,8 @@ class ParamLock : public Serializable, public LockSource
     }
 
   private:
+    const char* help_ = nullptr;
+
     /** Shared constructor tail — binds the manager to slots + arena. */
     void Bind(uint16_t* arena, uint8_t gesture_width)
     {

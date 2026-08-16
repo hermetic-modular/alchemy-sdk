@@ -24,7 +24,7 @@ namespace hostlink {
  * SDK-owned default buffers are safe to share.  SDRAM: big, cold, only
  * touched during host transactions — and not zeroed by startup, hence
  * the memsets in Start(). */
-static char    DSY_SDRAM_BSS s_descriptor[8u * 1024u];
+static char    DSY_SDRAM_BSS s_descriptor[24u * 1024u];
 static uint8_t DSY_SDRAM_BSS s_staging [kPresetBlobCapacity];
 static uint8_t DSY_SDRAM_BSS s_snapshot[kPresetBlobCapacity];
 
@@ -100,6 +100,19 @@ Host& Host::Descriptor(const void* json, uint32_t len)
 void Host::AddPage(const Page& p)
 {
     if (num_pages_ < kMaxPageRefs) pages_[num_pages_++] = &p;
+}
+
+Host& Host::Jacks(const Jack* jacks, uint8_t count)
+{
+    jacks_     = jacks;
+    num_jacks_ = count;
+    return *this;
+}
+
+Host& Host::Attach(const Manual& manual)
+{
+    manual_ = &manual;
+    return *this;
 }
 
 Host& Host::Buttons(const VirtualButton* buttons, uint8_t count)
@@ -200,7 +213,8 @@ void Host::Start()
             presets_, num_pages_ ? &set : nullptr,
             overrides_, num_overrides_,
             buttons_, num_buttons_,
-            num_frags ? frags : nullptr, num_frags);
+            num_frags ? frags : nullptr, num_frags,
+            jacks_, num_jacks_, manual_);
         link_->SetDescriptor(desc_buf_, len);
     }
 

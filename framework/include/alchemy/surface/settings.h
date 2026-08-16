@@ -99,6 +99,13 @@ class Settings : public Serializable
         SelectorHandle   Selector(uint8_t num_zones);
         CustomHandle     Custom ();
 
+        /** Labeled selector: zones deduced from the array. */
+        template <size_t N>
+        SelectorHandle Selector(const char* const (&labels)[N])
+        {
+            return Selector(static_cast<uint8_t>(N)).Labels(labels);
+        }
+
       private:
         Settings& s_;
         uint8_t   page_;
@@ -115,6 +122,13 @@ class Settings : public Serializable
         PageBuilder& Name(const char* name)
         {
             s_.page_names_[page_] = name;
+            return *this;
+        }
+
+        /** Manual prose for this page (markdown; descriptor-only). */
+        PageBuilder& Help(const char* md)
+        {
+            s_.page_help_[page_] = md;
             return *this;
         }
 
@@ -192,13 +206,64 @@ class Settings : public Serializable
         return (page < kSettingsMaxPages) ? page_names_[page] : nullptr;
     }
 
+    /** Page help declared via Page(pg).Help(...); nullptr when unset. */
+    const char* PageHelpAt(uint8_t page) const
+    {
+        return (page < kSettingsMaxPages) ? page_help_[page] : nullptr;
+    }
+
+    /* Per-slot identity + prose (nullptr/zero when undecorated). */
+    const char* IdentAt(uint8_t page, uint8_t pot) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        return s ? s->ident : nullptr;
+    }
+    const char* DisplayNameAt(uint8_t page, uint8_t pot) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        return s ? s->display_name : nullptr;
+    }
+    const char* const* LabelsAt(uint8_t page, uint8_t pot) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        return s ? s->labels : nullptr;
+    }
+    uint8_t NumLabelsAt(uint8_t page, uint8_t pot) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        return s ? s->num_labels : 0u;
+    }
+    const char* HelpAt(uint8_t page, uint8_t pot) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        return s ? s->help : nullptr;
+    }
+    const SeeRef* SeeRefsAt(uint8_t page, uint8_t pot, uint8_t* n) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        if (n) *n = s ? s->num_see : 0u;
+        return s ? s->see : nullptr;
+    }
+    bool SeeOverflowedAt(uint8_t page, uint8_t pot) const
+    {
+        const SettingsSlot* s = SlotAt(page, pot);
+        return s ? s->see_overflow : false;
+    }
+
     DescKind DescribeKind() const override { return DescKind::Settings; }
 
   private:
     friend class PotBuilder;
 
-    /* HostLink tab labels (set via PageBuilder::Name). */
+    const SettingsSlot* SlotAt(uint8_t page, uint8_t pot) const
+    {
+        if (page >= kSettingsMaxPages || pot >= kNumPots) return nullptr;
+        return &slots_[page][pot];
+    }
+
+    /* HostLink tab labels + page help (set via PageBuilder). */
     const char* page_names_[kSettingsMaxPages] = {};
+    const char* page_help_ [kSettingsMaxPages] = {};
 
     /* Mode-flag gesture state. */
     IButton*       b2_              = nullptr;
