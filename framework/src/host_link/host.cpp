@@ -13,8 +13,10 @@
 
 #include "alchemy/host_link/cdc_transport.h"
 #include "alchemy/surface/control_loop.h"
+#include "alchemy/surface/jack.h"
 #include "alchemy/surface/page.h"
 #include "alchemy/surface/presets.h"
+#include "alchemy/surface/virtual_button.h"
 #include "alchemy/version.h"
 
 namespace alchemy {
@@ -104,8 +106,8 @@ void Host::AddPage(const Page& p)
 
 Host& Host::Jacks(const Jack* jacks, uint8_t count)
 {
-    jacks_     = jacks;
-    num_jacks_ = count;
+    num_jacks_ = 0u;
+    for (uint8_t i = 0; jacks && i < count; i++) AddJack(jacks[i]);
     return *this;
 }
 
@@ -117,8 +119,8 @@ Host& Host::Attach(const Manual& manual)
 
 Host& Host::Buttons(const VirtualButton* buttons, uint8_t count)
 {
-    buttons_     = buttons;
-    num_buttons_ = count;
+    num_buttons_ = 0u;
+    for (uint8_t i = 0; buttons && i < count; i++) AddButton(buttons[i]);
     return *this;
 }
 
@@ -212,9 +214,9 @@ void Host::Start()
                                           ALCHEMY_SDK_VERSION, board_name},
             presets_, num_pages_ ? &set : nullptr,
             overrides_, num_overrides_,
-            buttons_, num_buttons_,
+            num_buttons_ ? btn_ptrs_ : nullptr, num_buttons_,
             num_frags ? frags : nullptr, num_frags,
-            jacks_, num_jacks_, manual_);
+            num_jacks_ ? jack_ptrs_ : nullptr, num_jacks_, manual_);
         link_->SetDescriptor(desc_buf_, len);
     }
 

@@ -180,6 +180,7 @@ class DescriptorBuilder
      * a no-op — the key is omitted entirely, preserving descriptor
      * bytes on modules that expose no button metadata. */
     bool Buttons(const VirtualButton* buttons, uint8_t count);
+    bool Buttons(const VirtualButton* const* buttons, uint8_t count);
 
     template <size_t N>
     bool Buttons(const VirtualButton (&buttons)[N])
@@ -189,6 +190,7 @@ class DescriptorBuilder
 
     /* ── Jacks (top-level, optional) ────────────────────────────── */
     bool Jacks(const Jack* jacks, uint8_t count);
+    bool Jacks(const Jack* const* jacks, uint8_t count);
 
     template <size_t N>
     bool Jacks(const Jack (&jacks)[N])
@@ -294,16 +296,16 @@ class DescriptorBuilder
     const Settings* settings_ = nullptr;
     int16_t         offsets_[kMaxSettingsPages][kMaxPots];
 
-    /* Buttons stashed for emission during Finish().  Pointer is
-     * non-owning — the caller keeps the array alive. */
-    const VirtualButton* buttons_     = nullptr;
-    uint8_t              num_buttons_ = 0u;
+    static constexpr uint8_t kMaxRootButtons = 8u;
+    static constexpr uint8_t kMaxJacks       = 16u;
 
-    /* Stashed for Finish(); non-owning like buttons. */
-    const Jack*   jacks_       = nullptr;
-    uint8_t       num_jacks_   = 0u;
-    const Manual* manual_      = nullptr;
-    bool          emit_manual_ = false;
+    /* Stashed for emission during Finish(); non-owning. */
+    const VirtualButton* btn_ptrs_[kMaxRootButtons] = {};
+    uint8_t              num_buttons_               = 0u;
+    const Jack*          jack_ptrs_[kMaxJacks]      = {};
+    uint8_t              num_jacks_                 = 0u;
+    const Manual*        manual_                    = nullptr;
+    bool                 emit_manual_               = false;
 
     /* Raw root fragments stashed for emission during Finish(). */
     const char* root_fragments_[kMaxRootFragments] = {};

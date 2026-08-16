@@ -339,11 +339,11 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const PageSet* pages,
                           const DescribeOverride* overrides,
                           uint8_t num_overrides,
-                          const VirtualButton* buttons,
+                          const VirtualButton* const* buttons,
                           uint8_t num_buttons,
                           const char* const* root_fragments,
                           uint8_t num_root_fragments,
-                          const Jack* jacks,
+                          const Jack* const* jacks,
                           uint8_t num_jacks,
                           const Manual* manual)
 {

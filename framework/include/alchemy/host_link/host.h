@@ -139,6 +139,15 @@ class Host : public HostService
         return Buttons(buttons, static_cast<uint8_t>(N));
     }
 
+    template <typename... Rest>
+    Host& Buttons(const VirtualButton& first, const Rest&... rest)
+    {
+        num_buttons_ = 0u;
+        AddButton(first);
+        (AddButton(rest), ...);
+        return *this;
+    }
+
     /** Declare the module's jacks (root "jacks" array).  Same lifetime
      *  rule as Buttons(). */
     Host& Jacks(const Jack* jacks, uint8_t count);
@@ -147,6 +156,15 @@ class Host : public HostService
     Host& Jacks(const Jack (&jacks)[N])
     {
         return Jacks(jacks, static_cast<uint8_t>(N));
+    }
+
+    template <typename... Rest>
+    Host& Jacks(const Jack& first, const Rest&... rest)
+    {
+        num_jacks_ = 0u;
+        AddJack(first);
+        (AddJack(rest), ...);
+        return *this;
     }
 
     /** Attach module-level manual content (tagline / preamble / sections).
@@ -179,9 +197,19 @@ class Host : public HostService
   private:
     static constexpr uint8_t kMaxOverrides = 8u;
     static constexpr uint8_t kMaxPageRefs  = 8u;
+    static constexpr uint8_t kMaxButtons   = 8u;
+    static constexpr uint8_t kMaxJacks     = 16u;
 
     static void PreBootTrampoline(void* self);
     void AddPage(const Page& p);
+    void AddButton(const VirtualButton& b)
+    {
+        if (num_buttons_ < kMaxButtons) btn_ptrs_[num_buttons_++] = &b;
+    }
+    void AddJack(const Jack& j)
+    {
+        if (num_jacks_ < kMaxJacks) jack_ptrs_[num_jacks_++] = &j;
+    }
 
     Presets&    presets_;
     const char* id_;
@@ -214,11 +242,11 @@ class Host : public HostService
     const Page*  pages_[kMaxPageRefs]   = {};
     uint8_t      num_pages_             = 0u;
 
-    const VirtualButton* buttons_       = nullptr;
-    uint8_t              num_buttons_   = 0u;
-    const Jack*          jacks_         = nullptr;
-    uint8_t              num_jacks_     = 0u;
-    const Manual*        manual_        = nullptr;
+    const VirtualButton* btn_ptrs_[kMaxButtons] = {};
+    uint8_t              num_buttons_            = 0u;
+    const Jack*          jack_ptrs_[kMaxJacks]   = {};
+    uint8_t              num_jacks_              = 0u;
+    const Manual*        manual_                 = nullptr;
 
     IHostlinkExtension* extensions_[HostLink::kMaxExtensions] = {};
     uint8_t             num_extensions_                       = 0u;

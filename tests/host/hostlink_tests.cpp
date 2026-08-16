@@ -1201,7 +1201,7 @@ static void TestManualEmission()
     static Jack clk  = Jack("J8", "CLK", JackSig::Trig)
                            .Short("CLK")
                            .Help("External clock input.");
-    static const Jack kJacks[3] = {in_l, in_r, clk};
+    static const Jack* kJacks[3] = {&in_l, &in_r, &clk};
 
     VirtualKnob cutoff = VirtualKnob(0, "Cutoff")
                              .Exp(20.f, 12000.f)
@@ -1219,12 +1219,13 @@ static void TestManualEmission()
     const PageSet pages{refs, 1};
 
     /* Root-array button: free-form gesture key, per-gesture help. */
-    static VirtualButton kRootBtns[1] = {
+    static VirtualButton root_btn =
         VirtualButton("bx", "Extra")
             .Action("Long Press", "Panic + reinit")
             .Help("The rescue button.")
-            .GestureHelp("Long Press", "Held for a second.")};
-    kRootBtns[0].SeeAlso(clk);
+            .GestureHelp("Long Press", "Held for a second.");
+    root_btn.SeeAlso(clk);
+    static const VirtualButton* kRootBtns[1] = {&root_btn};
 
     /* Bank button: structured tap slot keys as "tap". */
     sf.trig.Help("Fires the voice.").GestureHelp("tap", "Fires once.");
@@ -1286,10 +1287,11 @@ static void TestManualValidation()
     /* GestureHelp key matching no declared gesture fails. */
     {
         SurfaceFixture sf;
-        static VirtualButton kBad[1] = {
+        static VirtualButton bad_btn =
             VirtualButton("bx", "X")
                 .Action("Tap", "Fire")
-                .GestureHelp("Tp", "typo'd key")};
+                .GestureHelp("Tp", "typo'd key");
+        static const VirtualButton* kBad[1] = {&bad_btn};
         static char buf[16384];
         CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, sf.presets,
                                   nullptr, nullptr, 0, kBad, 1),
@@ -1373,12 +1375,13 @@ static void TestButtonsEmission()
             .Controls("mode.sub", B::Action::Toggle),
     };
 
+    static const B* kButtonRefs[2] = {&kButtons[0], &kButtons[1]};
+
     static char buf[8192];
     const uint32_t len = RenderDescriptor(
         buf, sizeof buf,
         {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
-        presets, nullptr, nullptr, 0,
-        kButtons, sizeof(kButtons) / sizeof(kButtons[0]));
+        presets, nullptr, nullptr, 0, kButtonRefs, 2);
     CHECK(len > 0u);
     const std::string json(buf, len);
 
@@ -1414,7 +1417,7 @@ static void TestButtonsEmission()
     const uint32_t len2 = RenderDescriptor(
         buf2, sizeof buf2,
         {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
-        presets, nullptr, nullptr, 0, kButtons, 0);
+        presets, nullptr, nullptr, 0, kButtonRefs, 0);
     CHECK(len2 > 0u);
     CHECK(std::string(buf2, len2).find("\"buttons\"") == std::string::npos);
 

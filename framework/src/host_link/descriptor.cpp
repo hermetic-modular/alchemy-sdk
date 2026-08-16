@@ -923,24 +923,57 @@ bool DescriptorBuilder::RawRoot(const char* fragment)
 
 bool DescriptorBuilder::Buttons(const VirtualButton* buttons, uint8_t count)
 {
-    if (pager_ || settings_ || generic_open_ || buttons_open_)
-        return Fail("buttons table while component open");
-    /* Passing a null pointer with a nonzero count would emit dangling
-     * commas in Finish(); reject up front. */
     if (count > 0u && !buttons)
         return Fail("buttons table null with nonzero count");
-    buttons_     = buttons;
+    if (count > kMaxRootButtons) return Fail("too many buttons");
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("buttons table while component open");
+    for (uint8_t i = 0; i < count; i++) btn_ptrs_[i] = &buttons[i];
+    num_buttons_ = count;
+    return !error_;
+}
+
+bool DescriptorBuilder::Buttons(const VirtualButton* const* buttons,
+                                uint8_t count)
+{
+    if (count > 0u && !buttons)
+        return Fail("buttons table null with nonzero count");
+    if (count > kMaxRootButtons) return Fail("too many buttons");
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("buttons table while component open");
+    for (uint8_t i = 0; i < count; i++)
+    {
+        if (!buttons[i]) return Fail("buttons table has null entry");
+        btn_ptrs_[i] = buttons[i];
+    }
     num_buttons_ = count;
     return !error_;
 }
 
 bool DescriptorBuilder::Jacks(const Jack* jacks, uint8_t count)
 {
-    if (pager_ || settings_ || generic_open_ || buttons_open_)
-        return Fail("jacks table while component open");
     if (count > 0u && !jacks)
         return Fail("jacks table null with nonzero count");
-    jacks_     = jacks;
+    if (count > kMaxJacks) return Fail("too many jacks");
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("jacks table while component open");
+    for (uint8_t i = 0; i < count; i++) jack_ptrs_[i] = &jacks[i];
+    num_jacks_ = count;
+    return !error_;
+}
+
+bool DescriptorBuilder::Jacks(const Jack* const* jacks, uint8_t count)
+{
+    if (count > 0u && !jacks)
+        return Fail("jacks table null with nonzero count");
+    if (count > kMaxJacks) return Fail("too many jacks");
+    if (pager_ || settings_ || generic_open_ || buttons_open_)
+        return Fail("jacks table while component open");
+    for (uint8_t i = 0; i < count; i++)
+    {
+        if (!jacks[i]) return Fail("jacks table has null entry");
+        jack_ptrs_[i] = jacks[i];
+    }
     num_jacks_ = count;
     return !error_;
 }
@@ -960,12 +993,12 @@ bool DescriptorBuilder::ManualBlock(const Manual* manual)
  * entries are cross-field refs — collected for the Finish() match. */
 void DescriptorBuilder::EmitRootButtons()
 {
-    if (num_buttons_ == 0u || buttons_ == nullptr) return;
+    if (num_buttons_ == 0u) return;
     w_.Key("buttons");
     w_.BeginArr();
     for (uint8_t i = 0; i < num_buttons_; i++)
     {
-        const VirtualButton& b = buttons_[i];
+        const VirtualButton& b = *btn_ptrs_[i];
         if (b.Ident()) RecordExtraId(b.Ident());
         w_.BeginObj();
         w_.Key("id");   w_.Str(b.Ident() ? b.Ident() : "");
@@ -1009,12 +1042,12 @@ void DescriptorBuilder::EmitRootButtons()
 
 void DescriptorBuilder::EmitRootJacks()
 {
-    if (num_jacks_ == 0u || jacks_ == nullptr) return;
+    if (num_jacks_ == 0u) return;
     w_.Key("jacks");
     w_.BeginArr();
     for (uint8_t i = 0; i < num_jacks_; i++)
     {
-        const Jack& j = jacks_[i];
+        const Jack& j = *jack_ptrs_[i];
         if (!j.Id() || !j.Id()[0]) { Fail("jack: empty id"); return; }
         RecordExtraId(j.Id());
         if (j.SeeOverflowed())

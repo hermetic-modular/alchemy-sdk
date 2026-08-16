@@ -729,8 +729,9 @@ void TestAnchorValidation()
         Presets    presets{s_dummy_qspi};
         presets.Manage(cutoff);
         static char buf[8192];
+        const VirtualButton* good_refs[1] = {&good};
         BCHECK(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
-                                nullptr, 0, &good, 1)
+                                nullptr, 0, good_refs, 1)
                > 0u);
 
         VirtualButton bad =
@@ -741,8 +742,9 @@ void TestAnchorValidation()
         Presets    p2{s_dummy_qspi};
         p2.Manage(cutoff2);
         static char buf2[8192];
+        const VirtualButton* bad_refs[1] = {&bad};
         BCHECK_EQ(RenderDescriptor(buf2, sizeof buf2, kVInfo, p2, nullptr,
-                                   nullptr, 0, &bad, 1),
+                                   nullptr, 0, bad_refs, 1),
                   0u);
     }
 }

@@ -80,11 +80,11 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const PageSet* pages,
                           const DescribeOverride* overrides,
                           uint8_t num_overrides,
-                          const VirtualButton* buttons = nullptr,
+                          const VirtualButton* const* buttons = nullptr,
                           uint8_t num_buttons = 0u,
                           const char* const* root_fragments = nullptr,
                           uint8_t num_root_fragments = 0u,
-                          const Jack* jacks = nullptr,
+                          const Jack* const* jacks = nullptr,
                           uint8_t num_jacks = 0u,
                           const Manual* manual = nullptr);
 
