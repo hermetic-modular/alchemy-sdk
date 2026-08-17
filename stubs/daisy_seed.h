@@ -78,10 +78,34 @@ struct QSPIHandle {
 
 /* ── AnalogControl ────────────────────────────────────────────────────── */
 
+/* Functional, not a no-op: host tests drive CvInput's transfer math
+ * through this. Instantaneous (slew ignored — the SDK's CV paths pass
+ * slew = 0). Matches the real control's documented semantics:
+ * Value() = raw/65535, flip → 1 − x, invert → 1 − x after flip.
+ * Callers that Init with a null ADC pointer keep the old sentinel 0. */
 struct AnalogControl {
-    void  Init(uint16_t*, float, bool, bool, float) {}
-    void  Process()                                 {}
-    float Value() const                             { return 0.f; }
+    void Init(uint16_t* adcptr, float, bool flip, bool invert, float)
+    {
+        raw_    = adcptr;
+        flip_   = flip;
+        invert_ = invert;
+        val_    = 0.f;
+    }
+    void Process()
+    {
+        if (!raw_) return;
+        float t = static_cast<float>(*raw_) / 65535.f;
+        if (flip_)   t = 1.f - t;
+        if (invert_) t = 1.f - t;
+        val_ = t;
+    }
+    float Value() const { return val_; }
+
+  private:
+    uint16_t* raw_    = nullptr;
+    bool      flip_   = false;
+    bool      invert_ = false;
+    float     val_    = 0.f;
 };
 
 /* ── Switch ───────────────────────────────────────────────────────────── */
