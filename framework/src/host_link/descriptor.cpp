@@ -30,6 +30,26 @@ DescriptorBuilder::DescriptorBuilder(char* buf, size_t cap,
             offsets_[pg][p] = -1;
 }
 
+void DescriptorBuilder::Defaults(const uint8_t* blob, size_t len)
+{
+    defs_     = blob;
+    defs_len_ = len;
+}
+
+bool DescriptorBuilder::DefF32(uint32_t abs_off, float* v)
+{
+    if (abs_off + 4u > defs_len_) return Fail("defaults image short");
+    std::memcpy(v, defs_ + abs_off, 4u);
+    return true;
+}
+
+bool DescriptorBuilder::DefByte(uint32_t abs_off, uint8_t* v)
+{
+    if (abs_off >= defs_len_) return Fail("defaults image short");
+    *v = defs_[abs_off];
+    return true;
+}
+
 bool DescriptorBuilder::Begin(const ModuleInfo& m)
 {
     w_.BeginObj();
@@ -275,6 +295,9 @@ bool DescriptorBuilder::PagerField(uint8_t page, uint8_t pot,
     const uint32_t off =
         (static_cast<uint32_t>(page) * pager_->NumPots() + pot) * 4u;
 
+    float def = pager_->Stored(page, pot);
+    if (defs_ && !DefF32(cum_off_ + off, &def)) return false;
+
     w_.BeginObj();
     w_.Key("id");   w_.Str(field_id);
     w_.Key("name"); w_.Str(name);
@@ -282,7 +305,7 @@ bool DescriptorBuilder::PagerField(uint8_t page, uint8_t pot,
     w_.Key("type"); w_.Str("f32");
     w_.Key("page"); w_.UInt(page);
     w_.Key("pot");  w_.UInt(pot);
-    w_.Key("def");  w_.Float(pager_->Stored(page, pot));
+    w_.Key("def");  w_.Float(def);
     w_.Key("disp");
     if (disp_json) w_.RawValue(disp_json);
     else           w_.RawValue("{\"kind\":\"norm\"}");
@@ -833,6 +856,9 @@ bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
     w_.Key("page"); w_.UInt(page);
     w_.Key("pot");  w_.UInt(pot);
 
+    const uint32_t abs_off =
+        cum_off_ + static_cast<uint32_t>(offsets_[page][pot]);
+
     if (kind == SettingsKind::Selector)
     {
         const uint8_t zones = settings_->ZonesAt(page, pot);
@@ -841,9 +867,12 @@ bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
         if (labels && num_labels != zones)
             return Fail("settings: selector labels != zones");
 
+        uint8_t def = settings_->SelectorIdxAt(page, pot);
+        if (defs_ && !DefByte(abs_off, &def)) return false;
+
         w_.Key("type");  w_.Str("enum");
         w_.Key("zones"); w_.UInt(zones);
-        w_.Key("def");   w_.UInt(settings_->SelectorIdxAt(page, pot));
+        w_.Key("def");   w_.UInt(def);
         w_.Key("disp");
         if (disp_json)
         {
@@ -867,8 +896,11 @@ bool DescriptorBuilder::SettingsField(uint8_t page, uint8_t pot,
     }
     else
     {
+        float def = settings_->StoredNormAt(page, pot);
+        if (defs_ && !DefF32(abs_off, &def)) return false;
+
         w_.Key("type"); w_.Str("f32");
-        w_.Key("def");  w_.Float(settings_->StoredNormAt(page, pot));
+        w_.Key("def");  w_.Float(def);
         w_.Key("disp");
         if (disp_json)
         {

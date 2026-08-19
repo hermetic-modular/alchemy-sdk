@@ -7,11 +7,12 @@
  * surfaces serialize with (Pager page/pot grid, Settings slot kinds), and
  * verifies at every stage that its arithmetic matches SerializedSize()
  * and the Presets Manage() order.  Any mismatch latches an error and
- * Finish() returns 0 — the firmware then simply reports "no descriptor"
- * instead of shipping a wrong one.
+ * Finish() returns 0 — never a wrong descriptor.  The RenderDescriptor
+ * wrapper (describe.h) degrades that to a minimal error descriptor so
+ * hosts can show LastError()'s reason.
  *
  * Usage (app code, once at boot, after controls are declared and defaults
- * seeded, before BootLoad):
+ * seeded — before BootLoad, or any time given a Defaults() image):
  *
  *   alchemy::hostlink::DescriptorBuilder db(buf, sizeof buf, presets);
  *   db.Begin({.id="echoa", .name="Echoa", .fw=..., .git=..., .sdk=..., .board="v1"});
@@ -65,6 +66,11 @@ class DescriptorBuilder
     };
 
     DescriptorBuilder(char* buf, size_t cap, const Presets& presets);
+
+    /** Factory-state image (a pre-BootLoad SerializeLive blob): field
+     *  defs decode from it, so the render may run after a preset loads.
+     *  Without it defs read live values (factory until the first load). */
+    void Defaults(const uint8_t* blob, size_t len);
 
     bool Begin(const ModuleInfo& m);
 
@@ -262,6 +268,9 @@ class DescriptorBuilder
     bool RecordRef(const char* kind, const char* target,
                    bool fields_only = false);
 
+    bool DefF32(uint32_t abs_off, float* v);
+    bool DefByte(uint32_t abs_off, uint8_t* v);
+
     /** Resolved id, or nullptr (build failed with a clear message). */
     const char* ResolveSee(const SeeRef& r, char* buf, size_t cap);
     /** Emit "help"/"see" for the open object; records refs for Finish(). */
@@ -275,6 +284,9 @@ class DescriptorBuilder
 
     JsonWriter     w_;
     const Presets& presets_;
+
+    const uint8_t* defs_     = nullptr;
+    size_t         defs_len_ = 0u;
 
     bool     error_       = false;
     uint8_t  comp_index_  = 0u;

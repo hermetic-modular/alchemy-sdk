@@ -23,9 +23,10 @@ namespace alchemy {
 namespace hostlink {
 
 /* One Host per system (the CDC callback is a hardware singleton), so
- * SDK-owned default buffers are safe to share.  SDRAM: big, cold, only
- * touched during host transactions — and not zeroed by startup, hence
- * the memsets in Start(). */
+ * SDK-owned default buffers are safe to share.  SDRAM: big, cold, not
+ * zeroed by startup — hence the memsets in Start().  s_snapshot needs
+ * none: every reader stays within the length last serialized into it
+ * (the factory image, then GET_LIVE). */
 static char    DSY_SDRAM_BSS s_descriptor[24u * 1024u];
 static uint8_t DSY_SDRAM_BSS s_staging [kPresetBlobCapacity];
 static uint8_t DSY_SDRAM_BSS s_snapshot[kPresetBlobCapacity];
@@ -46,14 +47,21 @@ Host::Host(Presets& presets, const char* id, const char* name,
            const char* fw_version, const char* git_hash)
     : presets_(presets), id_(id), name_(name), fw_(fw_version), git_(git_hash)
 {
-    /* Arm the pre-BootLoad hook: the descriptor renders while components
-     * still hold factory defaults, whatever the app's call order. */
+    /* Pre-BootLoad hook: snapshot factory state before the boot preset
+     * lands.  The descriptor renders later, at the first Poll(), when
+     * everything main() declares is attached — call order never matters. */
     presets_.SetPreBootHook(&PreBootTrampoline, this);
 }
 
 void Host::PreBootTrampoline(void* self)
 {
-    static_cast<Host*>(self)->Start();
+    static_cast<Host*>(self)->CaptureFactory();
+}
+
+void Host::CaptureFactory()
+{
+    if (factory_len_) return;
+    factory_len_ = presets_.SerializeLive(s_snapshot, sizeof s_snapshot);
 }
 
 Host& Host::Product(const char* usb_product) { product_ = usb_product; return *this; }
@@ -140,8 +148,9 @@ void Host::Start()
 
     if (!staging_)
     {
+        /* s_snapshot may hold the factory image — consumed below, then
+         * free for the link's GET_LIVE scratch. */
         std::memset(s_staging, 0, sizeof s_staging);
-        std::memset(s_snapshot, 0, sizeof s_snapshot);
         staging_  = s_staging;
         snapshot_ = s_snapshot;
         buf_cap_  = sizeof s_staging;
@@ -216,7 +225,8 @@ void Host::Start()
             overrides_, num_overrides_,
             num_buttons_ ? btn_ptrs_ : nullptr, num_buttons_,
             num_frags ? frags : nullptr, num_frags,
-            num_jacks_ ? jack_ptrs_ : nullptr, num_jacks_, manual_);
+            num_jacks_ ? jack_ptrs_ : nullptr, num_jacks_, manual_,
+            factory_len_ ? s_snapshot : nullptr, factory_len_);
         link_->SetDescriptor(desc_buf_, len);
     }
 

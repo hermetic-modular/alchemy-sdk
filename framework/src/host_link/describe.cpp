@@ -329,6 +329,35 @@ bool DescribeSettings(DescriptorBuilder& db, const Settings& st,
     return ok && db.EndSettings();
 }
 
+/* A failed build degrades to a minimal descriptor carrying the reason:
+ * identity intact, no state (empty components, zero size/hash), "error"
+ * root key — hosts show the cause instead of a silent "no descriptor". */
+uint32_t RenderErrorDescriptor(char* buf, size_t cap,
+                               const DescriptorBuilder::ModuleInfo& m,
+                               const char* reason)
+{
+    JsonWriter w(buf, cap);
+    w.BeginObj();
+    w.Key("dv");     w.UInt(1u);
+    w.Key("module");
+    w.BeginObj();
+    w.Key("id");     w.Str(m.id);
+    w.Key("name");   w.Str(m.name);
+    w.Key("fw");     w.Str(m.fw);
+    w.Key("git");    w.Str(m.git);
+    w.Key("sdk");    w.Str(m.sdk);
+    w.Key("board");  w.Str(m.board);
+    if (m.tagline) { w.Key("tagline"); w.Str(m.tagline); }
+    w.EndObj();
+    w.Key("schemaHash"); w.UInt(0u);
+    w.Key("size");       w.UInt(0u);
+    w.Key("components"); w.BeginArr(); w.EndArr();
+    w.Key("error");
+    w.Str(reason && reason[0] ? reason : "descriptor build failed");
+    w.EndObj();
+    return w.Ok() ? static_cast<uint32_t>(w.Length()) : 0u;
+}
+
 } // namespace
 
 /* ── RenderDescriptor ───────────────────────────────────────────────── */
@@ -345,7 +374,9 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           uint8_t num_root_fragments,
                           const Jack* const* jacks,
                           uint8_t num_jacks,
-                          const Manual* manual)
+                          const Manual* manual,
+                          const uint8_t* factory,
+                          size_t factory_len)
 {
     /* A manual tagline rides the module{} block. */
     DescriptorBuilder::ModuleInfo mi = info;
@@ -353,6 +384,7 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
         mi.tagline = manual->TaglineText();
 
     DescriptorBuilder db(buf, cap, presets);
+    if (factory && factory_len) db.Defaults(factory, factory_len);
     bool ok = db.Begin(mi);
     if (ok) ok = db.Buttons(buttons, num_buttons);
     if (ok) ok = db.Jacks(jacks, num_jacks);
@@ -420,7 +452,9 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
         }
     }
 
-    return ok ? db.Finish() : 0u;
+    const uint32_t len = ok ? db.Finish() : 0u;
+    if (len) return len;
+    return RenderErrorDescriptor(buf, cap, mi, db.LastError());
 }
 
 } // namespace hostlink

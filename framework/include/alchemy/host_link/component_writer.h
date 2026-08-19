@@ -8,8 +8,8 @@
  * until the first Field() (or Finalize()) emits the component, and every
  * offset is validated against the component's SerializedSize() by the
  * underlying builder.  A misuse (metadata after a field, out-of-bounds
- * offset) latches failure — the whole descriptor build then returns 0
- * and the module reports "no descriptor" instead of shipping a wrong one.
+ * offset) latches failure — the build fails and the module reports the
+ * reason via the error descriptor instead of shipping a wrong one.
  *
  * Typical custom component:
  *

@@ -19,7 +19,7 @@
  *       loop.Use(pager).Use(settings).Use(page_a).Use(page_b).Use(host);
  *
  *       presets.Init();
- *       presets.BootLoad();      // host starts here: descriptor + USB up
+ *       presets.BootLoad();      // factory defaults snapshot here
  *       ...
  *   }
  *
@@ -33,12 +33,11 @@
  *   - uid / reboot: MCU unique id, bootloader/System reset (.Uid(),
  *     .OnReboot())
  *
- * Start timing: the host arms itself via the Presets pre-BootLoad hook,
- * so the descriptor's captured defaults are factory defaults regardless
- * of call order — attach pages (loop.Use) before presets.BootLoad() and
- * there is nothing else to sequence.  Without a ControlLoop, call
- * Poll(t_ms) from your own loop (same thread as preset mutations) —
- * the first Poll starts the link if BootLoad never did.
+ * Start timing: nothing to sequence.  The pre-BootLoad hook only
+ * snapshots factory state; the descriptor renders and the link comes up
+ * at the first Poll(), after main() has attached pages, jacks, buttons,
+ * and manual content — in any order.  Without a ControlLoop, call
+ * Poll(t_ms) from your own loop (same thread as preset mutations).
  *
  * One Host per system (the CDC receive callback is a hardware
  * singleton).  Target-only; host builds exercise the descriptor layer
@@ -182,8 +181,8 @@ class Host : public HostService
 
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 
-    /** Bring the link up (idempotent).  Called automatically from the
-     *  Presets pre-BootLoad hook and from the first Poll(). */
+    /** Bring the link up (idempotent).  Runs at the first Poll(), once
+     *  everything main() declares is attached. */
     void Start();
 
     /** HostService: pump + execute (ControlLoop calls this at 1 ms). */
@@ -201,6 +200,7 @@ class Host : public HostService
     static constexpr uint8_t kMaxJacks     = 16u;
 
     static void PreBootTrampoline(void* self);
+    void CaptureFactory();
     void AddPage(const Page& p);
     void AddButton(const VirtualButton& b)
     {
@@ -251,8 +251,9 @@ class Host : public HostService
     IHostlinkExtension* extensions_[HostLink::kMaxExtensions] = {};
     uint8_t             num_extensions_                       = 0u;
 
-    HostLink* link_    = nullptr;
-    bool      started_ = false;
+    HostLink* link_        = nullptr;
+    bool      started_     = false;
+    size_t    factory_len_ = 0u;
     alignas(HostLink) uint8_t link_storage_[sizeof(HostLink)];
 };
 
