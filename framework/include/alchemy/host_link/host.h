@@ -19,7 +19,7 @@
  *       loop.Use(pager).Use(settings).Use(page_a).Use(page_b).Use(host);
  *
  *       presets.Init();
- *       presets.BootLoad();      // host starts here: descriptor + USB up
+ *       presets.BootLoad();      // factory defaults snapshot here
  *       ...
  *   }
  *
@@ -33,12 +33,11 @@
  *   - uid / reboot: MCU unique id, bootloader/System reset (.Uid(),
  *     .OnReboot())
  *
- * Start timing: the host arms itself via the Presets pre-BootLoad hook,
- * so the descriptor's captured defaults are factory defaults regardless
- * of call order — attach pages (loop.Use) before presets.BootLoad() and
- * there is nothing else to sequence.  Without a ControlLoop, call
- * Poll(t_ms) from your own loop (same thread as preset mutations) —
- * the first Poll starts the link if BootLoad never did.
+ * Start timing: nothing to sequence.  The pre-BootLoad hook only
+ * snapshots factory state; the descriptor renders and the link comes up
+ * at the first Poll(), after main() has attached pages, jacks, buttons,
+ * and manual content — in any order.  Without a ControlLoop, call
+ * Poll(t_ms) from your own loop (same thread as preset mutations).
  *
  * One Host per system (the CDC receive callback is a hardware
  * singleton).  Target-only; host builds exercise the descriptor layer
@@ -57,6 +56,8 @@
 namespace alchemy {
 
 class ControlLoop;
+class Jack;
+class Manual;
 class Page;
 class Presets;
 class VirtualButton;
@@ -87,7 +88,7 @@ class Host : public HostService
      *  @p cap must be ≥ the module's live serialized size. */
     Host& Buffers(uint8_t* staging, uint8_t* snapshot, size_t cap);
 
-    /** Custom descriptor buffer (default: SDK-owned 8 KiB in SDRAM). */
+    /** Custom descriptor buffer (default: SDK-owned 24 KiB in SDRAM). */
     Host& DescriptorBuffer(char* buf, size_t cap);
 
     /** Custom byte transport (default: CDC on the panel USB-C). */
@@ -137,6 +138,38 @@ class Host : public HostService
         return Buttons(buttons, static_cast<uint8_t>(N));
     }
 
+    template <typename... Rest>
+    Host& Buttons(const VirtualButton& first, const Rest&... rest)
+    {
+        num_buttons_ = 0u;
+        AddButton(first);
+        (AddButton(rest), ...);
+        return *this;
+    }
+
+    /** Declare the module's jacks (root "jacks" array).  Same lifetime
+     *  rule as Buttons(). */
+    Host& Jacks(const Jack* jacks, uint8_t count);
+
+    template <size_t N>
+    Host& Jacks(const Jack (&jacks)[N])
+    {
+        return Jacks(jacks, static_cast<uint8_t>(N));
+    }
+
+    template <typename... Rest>
+    Host& Jacks(const Jack& first, const Rest&... rest)
+    {
+        num_jacks_ = 0u;
+        AddJack(first);
+        (AddJack(rest), ...);
+        return *this;
+    }
+
+    /** Attach module-level manual content (tagline / preamble / sections).
+     *  Without it the descriptor still carries the stock preset help. */
+    Host& Attach(const Manual& manual);
+
     /**
      * Attach a protocol extension (see extension.h) — e.g. the SD
      * filesystem block.  Registered with the engine at Start(); an
@@ -148,8 +181,8 @@ class Host : public HostService
 
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 
-    /** Bring the link up (idempotent).  Called automatically from the
-     *  Presets pre-BootLoad hook and from the first Poll(). */
+    /** Bring the link up (idempotent).  Runs at the first Poll(), once
+     *  everything main() declares is attached. */
     void Start();
 
     /** HostService: pump + execute (ControlLoop calls this at 1 ms). */
@@ -163,9 +196,20 @@ class Host : public HostService
   private:
     static constexpr uint8_t kMaxOverrides = 8u;
     static constexpr uint8_t kMaxPageRefs  = 8u;
+    static constexpr uint8_t kMaxButtons   = 8u;
+    static constexpr uint8_t kMaxJacks     = 16u;
 
     static void PreBootTrampoline(void* self);
+    void CaptureFactory();
     void AddPage(const Page& p);
+    void AddButton(const VirtualButton& b)
+    {
+        if (num_buttons_ < kMaxButtons) btn_ptrs_[num_buttons_++] = &b;
+    }
+    void AddJack(const Jack& j)
+    {
+        if (num_jacks_ < kMaxJacks) jack_ptrs_[num_jacks_++] = &j;
+    }
 
     Presets&    presets_;
     const char* id_;
@@ -198,14 +242,18 @@ class Host : public HostService
     const Page*  pages_[kMaxPageRefs]   = {};
     uint8_t      num_pages_             = 0u;
 
-    const VirtualButton* buttons_       = nullptr;
-    uint8_t              num_buttons_   = 0u;
+    const VirtualButton* btn_ptrs_[kMaxButtons] = {};
+    uint8_t              num_buttons_            = 0u;
+    const Jack*          jack_ptrs_[kMaxJacks]   = {};
+    uint8_t              num_jacks_              = 0u;
+    const Manual*        manual_                 = nullptr;
 
     IHostlinkExtension* extensions_[HostLink::kMaxExtensions] = {};
     uint8_t             num_extensions_                       = 0u;
 
-    HostLink* link_    = nullptr;
-    bool      started_ = false;
+    HostLink* link_        = nullptr;
+    bool      started_     = false;
+    size_t    factory_len_ = 0u;
     alignas(HostLink) uint8_t link_storage_[sizeof(HostLink)];
 };
 

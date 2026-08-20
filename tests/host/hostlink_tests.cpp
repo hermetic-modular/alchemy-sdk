@@ -32,6 +32,8 @@
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/param_lock.h"
 #include "alchemy/surface/button_bank.h"
+#include "alchemy/surface/jack.h"
+#include "alchemy/surface/manual.h"
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
@@ -1094,6 +1096,16 @@ static void TestAutoDescribe()
     }
 }
 
+/* A failed build degrades to a minimal error descriptor (identity +
+ * reason) instead of returning 0 — probe the shape, never the text. */
+static bool IsErrorDescriptor(const char* buf, uint32_t len)
+{
+    if (len == 0u) return false;
+    const std::string j(buf, len);
+    return j.find("\"error\":") != std::string::npos
+        && j.find("\"components\":[]") != std::string::npos;
+}
+
 static void TestAutoDescribeGenericAndOverrides()
 {
     RamFlash flash;
@@ -1159,9 +1171,9 @@ static void TestAutoDescribeGenericAndOverrides()
             nullptr,
         }};
         static char buf[8192];
-        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, presets,
-                                  nullptr, ovr, 1),
-                 0u);
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      kAutoInfo, presets,
+                                                      nullptr, ovr, 1)));
     }
 
     /* Metadata after the first field is a misuse, not a silent no-op. */
@@ -1177,10 +1189,205 @@ static void TestAutoDescribeGenericAndOverrides()
             nullptr,
         }};
         static char buf[8192];
-        CHECK_EQ(RenderDescriptor(buf, sizeof buf, kAutoInfo, presets,
-                                  nullptr, ovr, 1),
-                 0u);
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      kAutoInfo, presets,
+                                                      nullptr, ovr, 1)));
     }
+}
+
+/* ── Manual layer: help / SeeAlso / jacks / manual block ──────────── */
+
+static void TestManualEmission()
+{
+    SurfaceFixture sf;
+    sf.settings.Page(0).Name("Setup").Help("Setup page help.");
+
+    static const char* kModeLabels[4] = {"A", "B", "C", "D"};
+    sf.mode.Ident("set.mode").Name("Mode Select").Labels(kModeLabels)
+           .Help("Selects the mode.");
+
+    static Jack in_l = Jack("IN_L", "In L", JackSig::AudioIn);
+    static Jack in_r = Jack("IN_R", "In R", JackSig::AudioIn).Normalled(in_l);
+    static Jack clk  = Jack("J8", "CLK", JackSig::Trig)
+                           .Short("CLK")
+                           .Help("External clock input.");
+    static const Jack* kJacks[3] = {&in_l, &in_r, &clk};
+
+    VirtualKnob cutoff = VirtualKnob(0, "Cutoff")
+                             .Exp(20.f, 12000.f)
+                             .Ident("flt.cutoff")
+                             .Help("Filter cutoff. **Sweep** it.")
+                             .SeeAlso(in_r, "presets");
+    /* Pot 2: the fixture's route button anchors positional "p0.1", so
+     * pots 0/1 must keep their positional ids. */
+    VirtualKnob drive = VirtualKnob(2, "Drive").Ident("drv");
+    drive.SeeAlso(cutoff, sf.mode, clk);
+
+    Page p0 = Page(0).Name("Time").Help("Page zero help.");
+    p0.Knobs(cutoff, drive);
+    const Page*   refs[1] = {&p0};
+    const PageSet pages{refs, 1};
+
+    /* Root-array button: free-form gesture key, per-gesture help. */
+    static VirtualButton root_btn =
+        VirtualButton("bx", "Extra")
+            .Action("Long Press", "Panic + reinit")
+            .Help("The rescue button.")
+            .GestureHelp("Long Press", "Held for a second.");
+    root_btn.SeeAlso(clk);
+    static const VirtualButton* kRootBtns[1] = {&root_btn};
+
+    /* Bank button: structured tap slot keys as "tap". */
+    sf.trig.Help("Fires the voice.").GestureHelp("tap", "Fires once.");
+
+    static const Manual kManual = Manual()
+                                      .Tagline("Test tagline")
+                                      .Preamble("**Preamble.**")
+                                      .Section("flow", "Signal Flow", "Body text.");
+
+    static char buf[32768];
+    const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                          sf.presets, &pages, nullptr, 0,
+                                          kRootBtns, 1, nullptr, 0,
+                                          kJacks, 3, &kManual);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* Wiring only: every manual emission path produced its key.  No
+     * content, ordering, or adjacency pins — text is free to change. */
+    static const char* kKeys[] = {
+        "\"tagline\":", "\"pageHelp\":", "\"help\":", "\"see\":",
+        "\"jacks\":",   "\"sig\":",      "\"norm\":", "\"short\":",
+        "\"manual\":",  "\"preamble\":", "\"sections\":", "\"presets\":",
+    };
+    for (const char* k : kKeys)
+        CHECK(json.find(k) != std::string::npos);
+    CHECK(json.find("\"error\":") == std::string::npos);
+}
+
+static void TestManualValidation()
+{
+    /* SeeAlso → knob without Ident() fails the build. */
+    {
+        SurfaceFixture sf;
+        VirtualKnob a = VirtualKnob(0, "A").Ident("a");
+        VirtualKnob b = VirtualKnob(1, "B"); /* no ident */
+        a.SeeAlso(b);
+        Page p0{0};
+        p0.Knobs(a, b);
+        const Page*   refs[1] = {&p0};
+        const PageSet pages{refs, 1};
+        static char buf[16384];
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      kAutoInfo, sf.presets,
+                                                      &pages, nullptr, 0)));
+    }
+    /* Dangling raw see id fails at Finish(). */
+    {
+        SurfaceFixture sf;
+        VirtualKnob a = VirtualKnob(0, "A").Ident("a").SeeAlso("no.such");
+        Page p0{0};
+        p0.Knobs(a);
+        const Page*   refs[1] = {&p0};
+        const PageSet pages{refs, 1};
+        static char buf[16384];
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      kAutoInfo, sf.presets,
+                                                      &pages, nullptr, 0)));
+    }
+    /* GestureHelp key matching no declared gesture fails. */
+    {
+        SurfaceFixture sf;
+        static VirtualButton bad_btn =
+            VirtualButton("bx", "X")
+                .Action("Tap", "Fire")
+                .GestureHelp("Tp", "typo'd key");
+        static const VirtualButton* kBad[1] = {&bad_btn};
+        static char buf[16384];
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      kAutoInfo, sf.presets,
+                                                      nullptr, nullptr, 0,
+                                                      kBad, 1)));
+    }
+}
+
+static void TestManualHashStability()
+{
+    SurfaceFixture sf;
+    static char b1[16384], b2[32768];
+    const uint32_t len1 = RenderDescriptor(b1, sizeof b1, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0);
+    CHECK(len1 > 0u);
+    const uint32_t hash_before = sf.presets.LiveSchemaHash();
+
+    /* Decorate everything decoratable; state shape untouched. */
+    static const char* kL[4] = {"A", "B", "C", "D"};
+    sf.mode.Ident("set.mode").Name("Mode").Labels(kL).Help("Mode help.");
+    sf.bright.Help("Bright help.");
+    sf.bip.Ident("set.bip").Help("Bip help.");
+    sf.settings.Page(0).Help("Page help.");
+    sf.trig.Help("Trig help.").GestureHelp("tap", "Tap help.");
+
+    static const Manual kManual =
+        Manual().Tagline("T").Preamble("P").Section("s", "S", "B");
+    const uint32_t len2 = RenderDescriptor(b2, sizeof b2, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0,
+                                           nullptr, 0, nullptr, 0,
+                                           nullptr, 0, &kManual);
+    CHECK(len2 > len1);
+    CHECK_EQ(sf.presets.LiveSchemaHash(), hash_before);
+
+    /* The emitted schemaHash and every component hash are byte-identical:
+     * prose lives only in the descriptor, never in any SchemaHash(). */
+    const std::string j1(b1, len1), j2(b2, len2);
+    const size_t h1 = j1.find("\"schemaHash\":");
+    const size_t h2 = j2.find("\"schemaHash\":");
+    CHECK(h1 != std::string::npos && h2 != std::string::npos);
+    CHECK(j1.substr(h1, j1.find(',', h1) - h1)
+          == j2.substr(h2, j2.find(',', h2) - h2));
+}
+
+/* Ordering independence: defs decode from a factory image captured
+ * before any preset load, so a render taken after a load is
+ * byte-identical to one taken at factory state. */
+static void TestFactoryDefaultsImage()
+{
+    SurfaceFixture sf;
+
+    static char b1[16384];
+    const uint32_t len1 = RenderDescriptor(b1, sizeof b1, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0);
+    CHECK(len1 > 0u);
+
+    static uint8_t img[kPresetBlobCapacity];
+    const size_t n = sf.presets.SerializeLive(img, sizeof img);
+    CHECK_EQ(n, sf.presets.LiveSize());
+
+    /* Simulate BootLoad: move live state away from factory. */
+    static const float kPhys[8] = {};
+    sf.pager.SetStored(0, 0, 0.9f, kPhys);
+
+    static char b2[16384];
+    const uint32_t len2 = RenderDescriptor(b2, sizeof b2, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0,
+                                           nullptr, 0, nullptr, 0,
+                                           nullptr, 0, nullptr, img, n);
+    CHECK_EQ(len2, len1);
+    CHECK(std::memcmp(b1, b2, len1) == 0);
+
+    /* Without the image the moved value leaks into def. */
+    static char b3[16384];
+    const uint32_t len3 = RenderDescriptor(b3, sizeof b3, kAutoInfo,
+                                           sf.presets, nullptr, nullptr, 0);
+    CHECK(len3 != len1 || std::memcmp(b1, b3, len1) != 0);
+
+    /* Truncated image fails loudly. */
+    static char b4[16384];
+    CHECK(IsErrorDescriptor(b4, RenderDescriptor(b4, sizeof b4, kAutoInfo,
+                                                 sf.presets, nullptr,
+                                                 nullptr, 0, nullptr, 0,
+                                                 nullptr, 0, nullptr, 0,
+                                                 nullptr, img, 2u)));
 }
 
 /* ── Buttons + custom-component meta ──────────────────────────────── */
@@ -1223,12 +1430,13 @@ static void TestButtonsEmission()
             .Controls("mode.sub", B::Action::Toggle),
     };
 
+    static const B* kButtonRefs[2] = {&kButtons[0], &kButtons[1]};
+
     static char buf[8192];
     const uint32_t len = RenderDescriptor(
         buf, sizeof buf,
         {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
-        presets, nullptr, nullptr, 0,
-        kButtons, sizeof(kButtons) / sizeof(kButtons[0]));
+        presets, nullptr, nullptr, 0, kButtonRefs, 2);
     CHECK(len > 0u);
     const std::string json(buf, len);
 
@@ -1264,7 +1472,7 @@ static void TestButtonsEmission()
     const uint32_t len2 = RenderDescriptor(
         buf2, sizeof buf2,
         {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
-        presets, nullptr, nullptr, 0, kButtons, 0);
+        presets, nullptr, nullptr, 0, kButtonRefs, 0);
     CHECK(len2 > 0u);
     CHECK(std::string(buf2, len2).find("\"buttons\"") == std::string::npos);
 
@@ -1274,7 +1482,7 @@ static void TestButtonsEmission()
         buf3, sizeof buf3,
         {"btnmod", "Buttons", "0.0.1", "gitbtn", "0.1.0", "v1"},
         presets, nullptr, nullptr, 0, nullptr, 2);
-    CHECK_EQ(len3, 0u);
+    CHECK(IsErrorDescriptor(buf3, len3));
 }
 
 /** Custom Serializable that emits per-kind metadata via ComponentWriter::Meta
@@ -1340,10 +1548,11 @@ static void TestComponentMeta()
         presetsE.Manage(em);
         presetsE.Init(flashE.Ops(), flashE.Base());
         static char bufE[8192];
-        CHECK_EQ(RenderDescriptor(bufE, sizeof bufE,
-                                  {"m", "m", "0", "g", "s", "v1"},
-                                  presetsE, nullptr, nullptr, 0),
-                 0u);
+        CHECK(IsErrorDescriptor(bufE, RenderDescriptor(bufE, sizeof bufE,
+                                                       {"m", "m", "0", "g",
+                                                        "s", "v1"},
+                                                       presetsE, nullptr,
+                                                       nullptr, 0)));
     }
 
     /* Meta after a field is malformed JSON — must fail the build. */
@@ -1365,10 +1574,11 @@ static void TestComponentMeta()
     presets2.Manage(bad);
     presets2.Init(flash2.Ops(), flash2.Base());
     static char buf2[8192];
-    CHECK_EQ(RenderDescriptor(buf2, sizeof buf2,
-                              {"m", "m", "0", "g", "s", "v1"},
-                              presets2, nullptr, nullptr, 0),
-             0u);
+    CHECK(IsErrorDescriptor(buf2, RenderDescriptor(buf2, sizeof buf2,
+                                                   {"m", "m", "0", "g",
+                                                    "s", "v1"},
+                                                   presets2, nullptr,
+                                                   nullptr, 0)));
 }
 
 static void TestJsonCheck()
@@ -1428,10 +1638,11 @@ static void TestDescriptorJsonValidation()
         presets.Manage(c);
         presets.Init(flash.Ops(), flash.Base());
         static char buf[8192];
-        CHECK_EQ(RenderDescriptor(buf, sizeof buf,
-                                  {"m", "m", "0", "g", "s", "v1"},
-                                  presets, nullptr, nullptr, 0),
-                 0u);
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      {"m", "m", "0", "g",
+                                                       "s", "v1"},
+                                                      presets, nullptr,
+                                                      nullptr, 0)));
     }
 
     struct TruncMeta : TestComp<4>
@@ -1450,10 +1661,11 @@ static void TestDescriptorJsonValidation()
         presets.Manage(c);
         presets.Init(flash.Ops(), flash.Base());
         static char buf[8192];
-        CHECK_EQ(RenderDescriptor(buf, sizeof buf,
-                                  {"m", "m", "0", "g", "s", "v1"},
-                                  presets, nullptr, nullptr, 0),
-                 0u);
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      {"m", "m", "0", "g",
+                                                       "s", "v1"},
+                                                      presets, nullptr,
+                                                      nullptr, 0)));
     }
 
     struct TrailMeta : TestComp<4>
@@ -1472,10 +1684,11 @@ static void TestDescriptorJsonValidation()
         presets.Manage(c);
         presets.Init(flash.Ops(), flash.Base());
         static char buf[8192];
-        CHECK_EQ(RenderDescriptor(buf, sizeof buf,
-                                  {"m", "m", "0", "g", "s", "v1"},
-                                  presets, nullptr, nullptr, 0),
-                 0u);
+        CHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                      {"m", "m", "0", "g",
+                                                       "s", "v1"},
+                                                      presets, nullptr,
+                                                      nullptr, 0)));
     }
 
     struct UIntMeta : TestComp<4>
@@ -1863,6 +2076,10 @@ int main(int argc, char** argv)
     TestSettingsGesturesEmission();
     TestAutoDescribe();
     TestAutoDescribeGenericAndOverrides();
+    TestManualEmission();
+    TestManualValidation();
+    TestManualHashStability();
+    TestFactoryDefaultsImage();
     TestButtonsEmission();
     TestComponentMeta();
     TestJsonCheck();

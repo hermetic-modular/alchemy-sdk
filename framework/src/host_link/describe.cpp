@@ -8,6 +8,8 @@
 #include <cstdio>
 
 #include "alchemy/surface/button_bank.h"
+#include "alchemy/surface/jack.h"
+#include "alchemy/surface/manual.h"
 #include "alchemy/surface/page.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/presets.h"
@@ -68,11 +70,13 @@ bool ComponentWriter::Open()
 
 bool ComponentWriter::Field(const char* id, const char* name, uint32_t off,
                             FieldType type, float def, const char* disp_json,
-                            uint16_t zones, int16_t page, int16_t pot)
+                            uint16_t zones, int16_t page, int16_t pot,
+                            const char* help, const SeeRef* see,
+                            uint8_t num_see)
 {
     if (!Open()) return false;
     ok_ = db_.GenericField(id, name, off, type, def, zones, disp_json,
-                           page, pot)
+                           page, pot, help, see, num_see)
           && ok_;
     return ok_;
 }
@@ -88,6 +92,13 @@ bool ComponentWriter::MetaUInt(const char* key, uint32_t value)
 {
     if (!Open()) return false;
     ok_ = db_.GenericMetaUInt(key, value) && ok_;
+    return ok_;
+}
+
+bool ComponentWriter::MetaStr(const char* key, const char* value)
+{
+    if (!Open()) return false;
+    ok_ = db_.GenericMetaStr(key, value) && ok_;
     return ok_;
 }
 
@@ -181,10 +192,11 @@ const char* DeriveKnobDisp(const VirtualKnob& k, char* buf, size_t cap)
 bool DescribePager(DescriptorBuilder& db, const Pager& pager,
                    const PageSet* pages, const char* id)
 {
-    /* Tab labels/colors from the declared Pages (sparse ok). */
+    /* Tab labels/colors/help from the declared Pages (sparse ok). */
     const char* names [Pager::kMaxPages] = {};
     const char* colors[Pager::kMaxPages] = {};
-    bool any_name = false, any_color = false;
+    const char* help  [Pager::kMaxPages] = {};
+    bool any_name = false, any_color = false, any_help = false;
     if (pages)
     {
         for (uint8_t i = 0; i < pages->count; i++)
@@ -193,18 +205,21 @@ bool DescribePager(DescriptorBuilder& db, const Pager& pager,
             if (!p || p->Index() >= pager.NumPages()) continue;
             if (p->TabName())  { names [p->Index()] = p->TabName();  any_name  = true; }
             if (p->TabColor()) { colors[p->Index()] = p->TabColor(); any_color = true; }
+            if (p->HelpText()) { help  [p->Index()] = p->HelpText(); any_help  = true; }
         }
     }
 
     bool ok = db.BeginPager(id, pager,
                             any_name  ? names  : nullptr,
-                            any_color ? colors : nullptr);
+                            any_color ? colors : nullptr,
+                            any_help  ? help   : nullptr);
 
     for (uint8_t pg = 0; ok && pg < pager.NumPages(); pg++)
     {
         for (uint8_t pot = 0; ok && pot < pager.NumPots(); pot++)
         {
             const VirtualKnob* k = FindKnob(pages, pg, pot);
+            if (k && k->SeeOverflowed()) return false;
 
             char idbuf[16], namebuf[16], dispbuf[192];
             const char* fid = (k && k->Ident()) ? k->Ident() : idbuf;
@@ -218,7 +233,10 @@ bool DescribePager(DescriptorBuilder& db, const Pager& pager,
 
             const char* disp =
                 k ? DeriveKnobDisp(*k, dispbuf, sizeof dispbuf) : nullptr;
-            ok = db.PagerField(pg, pot, fid, nm, disp);
+            ok = db.PagerField(pg, pot, fid, nm, disp,
+                               k ? k->ManualHelp() : nullptr,
+                               k ? k->SeeRefs()    : nullptr,
+                               k ? k->NumSeeRefs() : 0u);
         }
     }
     return ok && db.EndPager();
@@ -254,11 +272,16 @@ bool DescribeSettings(DescriptorBuilder& db, const Settings& st,
                       const char* id)
 {
     const char* names[kSettingsMaxPages] = {};
-    bool any_name = false;
+    const char* help [kSettingsMaxPages] = {};
+    bool any_name = false, any_help = false;
     for (uint8_t pg = 0; pg < st.NumPages() && pg < kSettingsMaxPages; pg++)
+    {
         if (st.PageNameAt(pg)) { names[pg] = st.PageNameAt(pg); any_name = true; }
+        if (st.PageHelpAt(pg)) { help [pg] = st.PageHelpAt(pg); any_help = true; }
+    }
 
-    bool ok = db.BeginSettings(id, st, any_name ? names : nullptr, nullptr);
+    bool ok = db.BeginSettings(id, st, any_name ? names : nullptr, nullptr,
+                               any_help ? help : nullptr);
 
     /* Count persisted controls per kind so a unique control gets a plain
      * name ("Brightness") and repeats get position suffixes. */
@@ -277,6 +300,7 @@ bool DescribeSettings(DescriptorBuilder& db, const Settings& st,
         {
             const SettingsKind k = st.KindAt(pg, pot);
             if (Settings::PersistedBytesFor(k) == 0u) continue;
+            if (st.SeeOverflowedAt(pg, pot)) return false;
 
             char fid[12], nm[24];
             std::snprintf(fid, sizeof fid, "s%u.%u", pg, pot);
@@ -286,11 +310,52 @@ bool DescribeSettings(DescriptorBuilder& db, const Settings& st,
             else
                 std::snprintf(nm, sizeof nm, "%s", SettingsKindName(k));
 
-            ok = db.SettingsField(pg, pot, fid, nm,
-                                  nullptr /* derive from kind */);
+            /* Declared identity wins; brightness ships stock help. */
+            const char* ident = st.IdentAt(pg, pot);
+            const char* name  = st.DisplayNameAt(pg, pot);
+            const char* h     = st.HelpAt(pg, pot);
+            if (!h && k == SettingsKind::Brightness)
+                h = stock_help::kBrightness;
+
+            uint8_t       num_see = 0u;
+            const SeeRef* see     = st.SeeRefsAt(pg, pot, &num_see);
+
+            ok = db.SettingsField(pg, pot, ident ? ident : fid,
+                                  name ? name : nm,
+                                  nullptr /* derive from kind/labels */,
+                                  h, see, num_see);
         }
     }
     return ok && db.EndSettings();
+}
+
+/* A failed build degrades to a minimal descriptor carrying the reason:
+ * identity intact, no state (empty components, zero size/hash), "error"
+ * root key — hosts show the cause instead of a silent "no descriptor". */
+uint32_t RenderErrorDescriptor(char* buf, size_t cap,
+                               const DescriptorBuilder::ModuleInfo& m,
+                               const char* reason)
+{
+    JsonWriter w(buf, cap);
+    w.BeginObj();
+    w.Key("dv");     w.UInt(1u);
+    w.Key("module");
+    w.BeginObj();
+    w.Key("id");     w.Str(m.id);
+    w.Key("name");   w.Str(m.name);
+    w.Key("fw");     w.Str(m.fw);
+    w.Key("git");    w.Str(m.git);
+    w.Key("sdk");    w.Str(m.sdk);
+    w.Key("board");  w.Str(m.board);
+    if (m.tagline) { w.Key("tagline"); w.Str(m.tagline); }
+    w.EndObj();
+    w.Key("schemaHash"); w.UInt(0u);
+    w.Key("size");       w.UInt(0u);
+    w.Key("components"); w.BeginArr(); w.EndArr();
+    w.Key("error");
+    w.Str(reason && reason[0] ? reason : "descriptor build failed");
+    w.EndObj();
+    return w.Ok() ? static_cast<uint32_t>(w.Length()) : 0u;
 }
 
 } // namespace
@@ -303,14 +368,27 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const PageSet* pages,
                           const DescribeOverride* overrides,
                           uint8_t num_overrides,
-                          const VirtualButton* buttons,
+                          const VirtualButton* const* buttons,
                           uint8_t num_buttons,
                           const char* const* root_fragments,
-                          uint8_t num_root_fragments)
+                          uint8_t num_root_fragments,
+                          const Jack* const* jacks,
+                          uint8_t num_jacks,
+                          const Manual* manual,
+                          const uint8_t* factory,
+                          size_t factory_len)
 {
+    /* A manual tagline rides the module{} block. */
+    DescriptorBuilder::ModuleInfo mi = info;
+    if (manual && manual->TaglineText() && !mi.tagline)
+        mi.tagline = manual->TaglineText();
+
     DescriptorBuilder db(buf, cap, presets);
-    bool ok = db.Begin(info);
+    if (factory && factory_len) db.Defaults(factory, factory_len);
+    bool ok = db.Begin(mi);
     if (ok) ok = db.Buttons(buttons, num_buttons);
+    if (ok) ok = db.Jacks(jacks, num_jacks);
+    if (ok) ok = db.ManualBlock(manual);   /* stock preset help at minimum */
     for (uint8_t i = 0u; ok && i < num_root_fragments; i++)
         ok = db.RawRoot(root_fragments[i]);
 
@@ -374,7 +452,9 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
         }
     }
 
-    return ok ? db.Finish() : 0u;
+    const uint32_t len = ok ? db.Finish() : 0u;
+    if (len) return len;
+    return RenderErrorDescriptor(buf, cap, mi, db.LastError());
 }
 
 } // namespace hostlink

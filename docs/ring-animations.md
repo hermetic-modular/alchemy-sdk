@@ -194,9 +194,12 @@ the same math.
 
 ## Stateful animators
 
-`Sparkle` (spawn/decay scatter across the ring) and `BeatPip`
-(tempo-synced bottom pip) keep caller-owned state and compose alongside
-the stack. See `anims/sparkle.h` and `anims/beat_pip.h`.
+`Sparkle` (spawn/decay scatter across the ring), `BeatPip`
+(tempo-synced bottom pip), and `ClipIndicator` (audio-fed clipping
+light: 98 % threshold, transient suppression, minimum hold; pips on
+configurable pots and buttons) keep caller-owned state and compose
+alongside the stack. See `anims/sparkle.h`, `anims/beat_pip.h`, and
+`anims/clip_indicator.h`.
 
 ## ParamSlot migration (pre-composition firmwares)
 
