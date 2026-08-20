@@ -81,10 +81,13 @@ class CvJack
 
     /** MCP4728 jack (J3..J6). `shadow_slot` points into the shared
      *  4-channel shadow array; `mcp_shadow_dirty` is unused for now (kept
-     *  for future batched-flush). */
+     *  for future batched-flush). `vdda` is the board VDDA out of the cal
+     *  record — the reference the record's zero codes and DAC fits were
+     *  measured against (kV2VddaDesign when uncalibrated). */
     void InitMcp(uint16_t*           adc_ptr,
                  float               sample_rate,
                  const V2JackCal*    cal,
+                 float               vdda,
                  Mcp4728*            mcp,
                  uint8_t             mcp_channel,
                  uint16_t*           shadow_slot,
@@ -93,10 +96,11 @@ class CvJack
                  uint8_t             select_io,
                  uint8_t             ldac_io);
 
-    /** STM DAC1 jack (J7, J8). */
+    /** STM DAC1 jack (J7, J8). `vdda` as in InitMcp. */
     void InitStm(uint16_t*                 adc_ptr,
                  float                     sample_rate,
                  const V2JackCal*          cal,
+                 float                     vdda,
                  daisy::DacHandle*         stm,
                  daisy::DacHandle::Channel stm_ch,
                  Pca9557*                  expander,

@@ -107,6 +107,17 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
      * cv_jacks[6..7] → J9, J10 codec output channels. Triggers bind to
      * codec input channels by index — actual sample-block processing
      * happens inside the audio shim. */
+
+    /* Input-side voltage reference. The record's VDDA is what the zero
+     * codes and the DAC fits were measured against (v2_factory_cal.cpp
+     * pass 1/3), so Volts() must use it too. Guard the persisted float:
+     * a CRC-valid but implausible value (bench-written record) must not
+     * poison every read — !(lo ≤ x ≤ hi) also rejects NaN. Window
+     * matches factory cal's own VREFINT validation. */
+    float cal_vdda = cal_.vdda_at_cal;
+    if (!(cal_vdda >= 3.0f && cal_vdda <= 3.6f))
+        cal_vdda = kV2VddaDesign;
+
     for (uint8_t i = 0; i < kNumCvInputs; i++)
     {
         const DacRoute& route = kDacRouting[i];
@@ -116,7 +127,7 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
         if (src < kMcp4728NumChannels)
         {
             cv_jacks[i].InitMcp(
-                seed.adc.GetPtr(kCvAdcOffset + i), sr, cal,
+                seed.adc.GetPtr(kCvAdcOffset + i), sr, cal, cal_vdda,
                 &dac, src,
                 &mcp_shadow_[src], mcp_shadow_,
                 &expander, route.select_io, kPca9557IoLdac);
@@ -127,7 +138,7 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
                 ? daisy::DacHandle::Channel::ONE
                 : daisy::DacHandle::Channel::TWO;
             cv_jacks[i].InitStm(
-                seed.adc.GetPtr(kCvAdcOffset + i), sr, cal,
+                seed.adc.GetPtr(kCvAdcOffset + i), sr, cal, cal_vdda,
                 &stm_dac, stm_ch,
                 &expander, route.select_io);
         }

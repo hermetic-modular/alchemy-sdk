@@ -18,6 +18,8 @@
 
 #include "daisy_seed.h"
 
+#include "alchemy/hw/v2_calibration.h"
+
 namespace alchemy {
 
 class CvInput
@@ -28,17 +30,18 @@ class CvInput
         ac_.Init(adcptr, sample_rate, flip, invert, slew);
     }
 
-    /** Apply per-channel calibration (zero code from the idle pass, VDDA
-     *  from VREFINT). Called by AlchemyLabV2::Init(); harmless to call
-     *  with design-fallback values (32768 / 3.30) — that reproduces the
+    /** Apply per-channel calibration: zero code from the idle pass and
+     *  the board VDDA, both out of the V2Calibration record. Reached via
+     *  CvJack::Init* during AlchemyLabV2::Init(); harmless to call with
+     *  design-fallback values (32768 / 3.30) — that reproduces the
      *  uncalibrated transfer exactly. */
     void SetCalibration(uint16_t adc_zero_code, float vdda)
     {
         /* With flip=true, Value() = 1 − raw/65535. Jack volts:
-         *   v = (zero_raw − raw) × vdda / 65535 / 0.165
-         *     = (Value() − (1 − zero_raw/65535)) × vdda / 0.165        */
+         *   v = (zero_raw − raw) × vdda / 65535 / kV2CvInGainDesign
+         *     = (Value() − (1 − zero_raw/65535)) × vdda / kV2CvInGainDesign */
         cal_offset_ = 1.0f - static_cast<float>(adc_zero_code) / 65535.0f;
-        cal_scale_  = vdda / 0.165f;
+        cal_scale_  = vdda / kV2CvInGainDesign;
         calibrated_ = true;
     }
 
@@ -56,13 +59,17 @@ class CvInput
     {
         if (calibrated_)
             return (ac_.Value() - cal_offset_) * cal_scale_;
-        return (ac_.Value() - 0.5f) * 20.0f;
+        return (ac_.Value() - 0.5f) * kDesignScale;
     }
 
   private:
+    /* Design-nominal jack scale, VDDA/gain = 3.30/0.165 → 20 V per unit
+     * of Value(). Same constants the factory-cal fit is derived from. */
+    static constexpr float kDesignScale = kV2VddaDesign / kV2CvInGainDesign;
+
     daisy::AnalogControl ac_;
     float cal_offset_ = 0.5f;
-    float cal_scale_  = 20.0f;
+    float cal_scale_  = kDesignScale;
     bool  calibrated_ = false;
 };
 

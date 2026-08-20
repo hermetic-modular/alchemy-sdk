@@ -19,6 +19,7 @@ constexpr float kCodecFullScaleVolts = 5.0f;
 void CvJack::InitMcp(uint16_t*        adc_ptr,
                      float            sample_rate,
                      const V2JackCal* cal,
+                     float            vdda,
                      Mcp4728*         mcp,
                      uint8_t          mcp_channel,
                      uint16_t*        shadow_slot,
@@ -39,12 +40,13 @@ void CvJack::InitMcp(uint16_t*        adc_ptr,
     mcp_shadow_slot_  = shadow_slot;
     mcp_shadow_array_ = shadow_array;
     ldac_io_          = ldac_io;
-    if (cal_) in_.SetCalibration(cal_->adc_zero_code, /*vdda*/ 3.30f);
+    if (cal_) in_.SetCalibration(cal_->adc_zero_code, vdda);
 }
 
 void CvJack::InitStm(uint16_t*                 adc_ptr,
                      float                     sample_rate,
                      const V2JackCal*          cal,
+                     float                     vdda,
                      daisy::DacHandle*         stm,
                      daisy::DacHandle::Channel stm_ch,
                      Pca9557*                  expander,
@@ -59,7 +61,7 @@ void CvJack::InitStm(uint16_t*                 adc_ptr,
     target_v_  = 0.0f;
     stm_       = stm;
     stm_ch_    = stm_ch;
-    if (cal_) in_.SetCalibration(cal_->adc_zero_code, /*vdda*/ 3.30f);
+    if (cal_) in_.SetCalibration(cal_->adc_zero_code, vdda);
 }
 
 void CvJack::InitCodec(uint8_t codec_channel)
