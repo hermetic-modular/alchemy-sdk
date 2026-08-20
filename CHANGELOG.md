@@ -1,6 +1,38 @@
-# Unreleased
+# Alchemy SDK v0.10.0 — 2026-08-19
 
-## ClipIndicator: SDK clipping light
+Modules can now ship their own documentation, and the descriptor build
+stopped failing quietly.
+
+## Interactive manual support (#21)
+
+- Firmware can carry its own manual. `.Help()` attaches prose to knobs,
+  buttons, settings, pages, and jacks; `.SeeAlso()` makes typed
+  cross-references that resolve and validate at build time.
+- `alchemy::Jack` (`surface/jack.h`): pure descriptor metadata for a panel
+  jack: id, name, silk label, signal class, normalling. No runtime behavior,
+  no state, no schema-hash impact.
+- `alchemy::Manual` (`surface/manual.h`): module-level tagline, preamble, and
+  long-form sections, plus `stock_help` for the features the SDK owns
+  (presets, parameter locks, storage, brightness).
+- `VirtualButton::GestureHelp(key, md)` keys help to the gesture string passed
+  to `.Action()`; a key matching no declared gesture fails the build.
+- Settings slots gain identity: `.Ident()`, `.Name()`, `.Help()`, labeled
+  `Selector`, and per-page help.
+- Descriptor rendering no longer depends on the order of calls in `main()`.
+  Factory defaults are captured before the boot preset loads; the descriptor
+  renders once everything is declared.
+- A failed descriptor build reports its reason over the wire instead of
+  returning zero, so a bad cross-reference surfaces in the host rather than as
+  a module that silently claims to have no descriptor (protocol §5.2).
+- Additive on the wire; `dv` stays 1. Prose never reaches any schema hash, so
+  editing help text cannot invalidate a saved preset.
+
+## Calibrated VDDA for CV input volts (#22)
+
+- CV input voltage conversion uses the calibrated VDDA rather than the nominal
+  value.
+
+## ClipIndicator: SDK clipping light (#19)
 
 - `alchemy::ClipIndicator` (`anims/clip_indicator.h`) — audio-fed clip light
   with a 98 % full-scale threshold, leaky-bucket transient suppression (a
