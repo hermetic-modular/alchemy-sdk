@@ -1,3 +1,37 @@
+# Unreleased
+
+## ClipIndicator: SDK clipping light
+
+- `alchemy::ClipIndicator` (`anims/clip_indicator.h`) — audio-fed clip light
+  with a 98 % full-scale threshold, leaky-bucket transient suppression (a
+  one-sample graze no longer flashes the panel), and a 50 ms minimum hold that
+  retriggers while clipping persists. Feed `Process()` from the audio callback
+  (ISR-safe single-word handoff); everything else is wired by `loop.Use(clip)`
+  — detection ticks at the poll cadence, pips draw above the perf render.
+- Declares like a VirtualKnob, with good defaults (every pot pip, red, 50 ms):
+
+  ```cpp
+  static ClipIndicator clip = ClipIndicator()
+      .Hold(120.0f)
+      .Pots(kPotTopLeft, kPotTopRight)
+      .Buttons(kButtonB3);
+  ```
+
+  Also `Threshold`, `Suppression(samples, window_ms)`, `Accent`, `PipHour`,
+  `Color`, `AllPots`, and `SetEnabled()` for a settings toggle. Bespoke loops
+  call `Tick(dt_ms)` / `Draw(panel)` directly; `Draw(panel, color)` serves
+  palette-driven modules.
+- The sample scan runs as integer bit-pattern compares (abs = clear the sign
+  bit; IEEE ordering is monotonic), so the audio-side cost is ~7 integer
+  instructions per checked sample with no FPU flag transfers — and it probes
+  at a stride derived from the suppression config (`min_clipped_samples / 2`,
+  capped at 16; 4 for the default 8), with each hit counting as one stride of
+  samples. The derivation keeps the suppression contract intact at any
+  setting — a lone sub-stride burst can never reach the trigger — while the
+  scan gets proportionally cheaper as suppression relaxes, and exact when it
+  drops below 4. Non-finite samples (NaN/Inf) count as clipped — a broken
+  signal lights the alarm.
+
 # Alchemy SDK v0.9.0 — 2026-08-14
 
 The first versioned Alchemy SDK release, trying out a new cadence instead of merging PRs as I please.
