@@ -37,10 +37,13 @@
 #pragma once
 
 #include <cstdint>
+#include <cstring>
 
 #include "alchemy/host_link/extension.h"
+#include "alchemy/host_link/json_writer.h"
 #include "alchemy/host_link/wire.h"
 #include "alchemy/storage/sd_card.h"
+#include "alchemy/surface/manual.h"
 
 namespace alchemy {
 namespace hostlink {
@@ -58,9 +61,32 @@ class FsExtension : public IHostlinkExtension
     void Handle(const ParsedFrame& f, FrameWriter& w, uint32_t now_ms) override;
     void Tick(uint32_t now_ms) override;
 
+    /** Storage help override (default: stock_help::kStorage).  Set
+     *  before the descriptor renders. */
+    FsExtension& Help(const char* md)
+    {
+        help_ = md;
+        return *this;
+    }
+
     const char* DescriptorRootJson() const override
     {
-        return "\"storage\":{\"sd\":true,\"fsv\":1}";
+        /* Escape help into the member buffer; on overflow degrade to
+         * the bare advertisement. */
+        JsonWriter jw(frag_, sizeof frag_ - 12u); /* room for "storage": */
+        jw.BeginObj();
+        jw.Key("sd");   jw.Bool(true);
+        jw.Key("fsv");  jw.UInt(1u);
+        jw.Key("help"); jw.Str(help_ ? help_ : stock_help::kStorage);
+        jw.EndObj();
+        if (!jw.Ok() || !jw.Terminate())
+            return "\"storage\":{\"sd\":true,\"fsv\":1}";
+        /* Prepend the root key around the value we just built. */
+        const size_t vlen = jw.Length();
+        std::memmove(frag_ + 10u, frag_, vlen);
+        std::memcpy(frag_, "\"storage\":", 10u);
+        frag_[10u + vlen] = '\0';
+        return frag_;
     }
 
     /** Drop all session state (open transfer, listing cursor) WITHOUT
@@ -106,6 +132,11 @@ class FsExtension : public IHostlinkExtension
     bool CollidesWithTransfer(const char* path) const;
 
     SdCard& card_;
+
+    /* Manual prose + rendered root fragment (built lazily per render;
+     * mutable because DescriptorRootJson() is const in the interface). */
+    const char*  help_      = nullptr;
+    mutable char frag_[768] = {};
 
     /* ── Open transfer (at most one, read or write) ─────────────────── */
     XferMode mode_        = XferMode::None;

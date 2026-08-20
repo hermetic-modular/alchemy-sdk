@@ -341,6 +341,16 @@ key (see §8) so hosts can light up file-management UI without probing:
 "storage": { "sd": true, "fsv": 1 }
 ```
 
+A firmware whose descriptor build failed its drift/ref validation emits a
+minimal descriptor instead of none: module identity intact, `schemaHash`
+and `size` zero, `components` empty, and an `error` root key holding the
+reason.  Hosts must treat any descriptor carrying `error` as
+identity-only — show the reason, attempt no state operations:
+
+```jsonc
+"error": "see 'flt.cutof' names no field"
+```
+
 Unknown root keys must be ignored (additive, per §6).
 
 ### 5.3 Buttons (root metadata array — legacy)

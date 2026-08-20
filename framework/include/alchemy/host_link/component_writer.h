@@ -8,8 +8,8 @@
  * until the first Field() (or Finalize()) emits the component, and every
  * offset is validated against the component's SerializedSize() by the
  * underlying builder.  A misuse (metadata after a field, out-of-bounds
- * offset) latches failure — the whole descriptor build then returns 0
- * and the module reports "no descriptor" instead of shipping a wrong one.
+ * offset) latches failure — the build fails and the module reports the
+ * reason via the error descriptor instead of shipping a wrong one.
  *
  * Typical custom component:
  *
@@ -71,7 +71,9 @@ class ComponentWriter
     /** One field at byte offset @p off; see DescriptorBuilder::GenericField. */
     bool Field(const char* id, const char* name, uint32_t off,
                FieldType type, float def, const char* disp_json = nullptr,
-               uint16_t zones = 0u, int16_t page = -1, int16_t pot = -1);
+               uint16_t zones = 0u, int16_t page = -1, int16_t pot = -1,
+               const char* help = nullptr,
+               const SeeRef* see = nullptr, uint8_t num_see = 0u);
 
     /**
      * Emit `,"<key>":<raw_json>` inside the component object, between the
@@ -86,6 +88,9 @@ class ComponentWriter
     bool Meta(const char* key, const char* raw_json);
 
     bool MetaUInt(const char* key, uint32_t value);
+
+    /** String meta, JSON-escaped (component-level "help"). */
+    bool MetaStr(const char* key, const char* value);
 
     /* ── Renderer interface ─────────────────────────────────────────── */
 

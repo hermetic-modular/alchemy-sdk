@@ -36,6 +36,7 @@
 #include "alchemy/surface/cv_source.h"
 #include "alchemy/surface/knob_storage.h"
 #include "alchemy/surface/lock_source.h"
+#include "alchemy/surface/see_ref.h"
 
 namespace alchemy {
 
@@ -383,6 +384,20 @@ class VirtualKnob
     /** Raw display-hint JSON (protocol §5); overrides the derived hint. */
     VirtualKnob& Disp(const char* disp_json) { disp_json_ = disp_json; return *this; }
 
+    /* ── Manual prose (typically one manual.cpp) ──────────────────────
+     * One markdown layer; never restate structured facts.  SeeAlso takes
+     * the referenced objects (mixed kinds); refs are validated at the
+     * descriptor build — referenced knobs need .Ident(). */
+
+    VirtualKnob& Help(const char* md) { help_ = md; return *this; }
+
+    template <typename... Refs>
+    VirtualKnob& SeeAlso(const Refs&... refs)
+    {
+        (AddSee(SeeRef(refs)), ...);
+        return *this;
+    }
+
     /* ── Read accessors (ISR-safe; cheap) ────────────────────────────── */
 
     /**
@@ -422,6 +437,10 @@ class VirtualKnob
     const char* const* Labels()    const { return labels_; }
     uint8_t            NumLabels() const { return num_labels_; }
     const char*        DispJson()  const { return disp_json_; }
+    const char*        ManualHelp() const { return help_; }
+    const SeeRef*      SeeRefs()   const { return see_; }
+    uint8_t            NumSeeRefs() const { return num_see_; }
+    bool               SeeOverflowed() const { return see_overflow_; }
     Xform              Transform() const { return xform_; }
     float              XformMin()  const { return xform_min_; }
     float              XformMax()  const { return xform_max_; }
@@ -485,6 +504,12 @@ class VirtualKnob
     void*  OverdrawCtx()    const { return overdraw_ctx_; }
 
   private:
+    void AddSee(const SeeRef& r)
+    {
+        if (num_see_ < kMaxSeeRefs) see_[num_see_++] = r;
+        else                        see_overflow_ = true;
+    }
+
     /* Read helpers — all ISR-safe. */
 
     float StoredValue() const
@@ -549,6 +574,12 @@ class VirtualKnob
     const char*        disp_json_  = nullptr;
     const char* const* labels_     = nullptr;
     uint8_t            num_labels_ = 0;
+
+    /* Manual prose (optional; descriptor-only, never hashed). */
+    const char* help_             = nullptr;
+    SeeRef      see_[kMaxSeeRefs] = {};
+    uint8_t     num_see_          = 0;
+    bool        see_overflow_     = false;
 
     /* Transform. */
     Xform xform_     = Xform::Linear;

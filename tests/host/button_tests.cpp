@@ -59,6 +59,15 @@ static int s_failures = 0;
 
 namespace {
 
+/* Failed builds degrade to a minimal error descriptor, not 0. */
+bool IsErrorDescriptor(const char* buf, uint32_t len)
+{
+    if (len == 0u) return false;
+    const std::string j(buf, len);
+    return j.find("\"error\":") != std::string::npos
+        && j.find("\"components\":[]") != std::string::npos;
+}
+
 /* ── Fakes and drivers ─────────────────────────────────────────────── */
 
 /** Debounced-button stub.  Counts the consume-on-read edge calls so the
@@ -561,11 +570,12 @@ void TestDescriptorEmission()
     Presets p2{s_dummy_qspi};
     p2.Manage(broken);
     static char buf2[8192];
-    BCHECK_EQ(RenderDescriptor(buf2, sizeof buf2,
-                               {"btnbank", "Bank", "0.0.1", "gitbtn",
-                                "0.1.0", "v1"},
-                               p2, nullptr, nullptr, 0),
-              0u);
+    BCHECK(IsErrorDescriptor(buf2, RenderDescriptor(buf2, sizeof buf2,
+                                                    {"btnbank", "Bank",
+                                                     "0.0.1", "gitbtn",
+                                                     "0.1.0", "v1"},
+                                                    p2, nullptr,
+                                                    nullptr, 0)));
 }
 
 /* ── Anchor / controls ref validation ──────────────────────────────── */
@@ -695,9 +705,10 @@ void TestAnchorValidation()
         Presets presets{s_dummy_qspi};
         presets.Manage(bank);
         static char buf[8192];
-        BCHECK_EQ(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
-                                   nullptr, 0),
-                  0u);
+        BCHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                       kVInfo, presets,
+                                                       nullptr,
+                                                       nullptr, 0)));
     }
     {
         /* Self-anchor. */
@@ -714,9 +725,10 @@ void TestAnchorValidation()
         Presets presets{s_dummy_qspi};
         presets.Manage(bank);
         static char buf[8192];
-        BCHECK_EQ(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
-                                   nullptr, 0),
-                  0u);
+        BCHECK(IsErrorDescriptor(buf, RenderDescriptor(buf, sizeof buf,
+                                                       kVInfo, presets,
+                                                       nullptr,
+                                                       nullptr, 0)));
     }
     {
         /* Legacy root-array Controls: a resolving ref passes, a dangling
@@ -729,8 +741,9 @@ void TestAnchorValidation()
         Presets    presets{s_dummy_qspi};
         presets.Manage(cutoff);
         static char buf[8192];
+        const VirtualButton* good_refs[1] = {&good};
         BCHECK(RenderDescriptor(buf, sizeof buf, kVInfo, presets, nullptr,
-                                nullptr, 0, &good, 1)
+                                nullptr, 0, good_refs, 1)
                > 0u);
 
         VirtualButton bad =
@@ -741,9 +754,11 @@ void TestAnchorValidation()
         Presets    p2{s_dummy_qspi};
         p2.Manage(cutoff2);
         static char buf2[8192];
-        BCHECK_EQ(RenderDescriptor(buf2, sizeof buf2, kVInfo, p2, nullptr,
-                                   nullptr, 0, &bad, 1),
-                  0u);
+        const VirtualButton* bad_refs[1] = {&bad};
+        BCHECK(IsErrorDescriptor(buf2, RenderDescriptor(buf2, sizeof buf2,
+                                                        kVInfo, p2, nullptr,
+                                                        nullptr, 0,
+                                                        bad_refs, 1)));
     }
 }
 

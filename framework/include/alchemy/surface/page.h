@@ -115,6 +115,9 @@ class Page
     Page& Name (const char* name)    { name_  = name;  return *this; }
     Page& Color(const char* css_hex) { color_ = css_hex; return *this; }
 
+    /** Manual prose for this page (markdown; descriptor-only). */
+    Page& Help(const char* md) { help_ = md; return *this; }
+
     /* ── Read accessors ───────────────────────────────────────────────── */
 
     uint8_t      Index() const { return idx_; }
@@ -130,12 +133,14 @@ class Page
     }
     const char*  TabName () const { return name_; }
     const char*  TabColor() const { return color_; }
+    const char*  HelpText() const { return help_; }
 
   private:
     uint8_t      idx_;
     uint8_t      count_         = 0;
     const char*  name_          = nullptr;
     const char*  color_         = nullptr;
+    const char*  help_          = nullptr;
     VirtualKnob* knobs_[kMaxKnobs] = {};
 
     VirtualButton* buttons_[kMaxButtons] = {};

@@ -20,8 +20,11 @@
  * Page::Name()/Color().  Without a PageSet the pager still describes
  * fully — with positional ids and generic labels.
  *
- * All DescriptorBuilder drift guards apply; any failure returns 0 and
- * the module reports "no descriptor" (hosts fall back to raw backup).
+ * All DescriptorBuilder drift guards apply; any failure degrades to a
+ * minimal descriptor carrying the module identity and an "error" root
+ * key with the reason — hosts show the cause instead of a silent
+ * "no descriptor".  0 is returned only when the buffer cannot even
+ * hold that.
  *
  * This layer is host-buildable and unit-tested; hostlink::Host wraps it
  * on target with transport/buffer/uid/reboot defaults.
@@ -40,6 +43,8 @@ class Page;
 class Presets;
 class Serializable;
 class VirtualButton;
+class Jack;
+class Manual;
 
 namespace hostlink {
 
@@ -66,8 +71,14 @@ struct PageSet
  * @p buttons, and @p root_fragments are optional (pass nullptr / 0).
  * Buttons become the top-level "buttons" array (protocol §5.3); root
  * fragments are `"key":value` splices merged into the root object
- * (§5.2, e.g. the storage advertisement).  Returns the descriptor
- * length, or 0 on any drift, overflow, or describer failure.
+ * (§5.2, e.g. the storage advertisement).  @p jacks becomes the root
+ * "jacks" array; @p manual the root "manual" block — the auto path
+ * always emits the manual block (stock preset help at minimum), and a
+ * manual tagline rides into module{}.  @p factory, when given, is a
+ * pre-BootLoad SerializeLive image: field defs decode from it, so the
+ * render may run after presets load.  Returns the descriptor length; a
+ * failed build returns a minimal error descriptor (see above), and 0
+ * only when even that overflows @p cap.
  */
 uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescriptorBuilder::ModuleInfo& info,
@@ -75,10 +86,15 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           const PageSet* pages,
                           const DescribeOverride* overrides,
                           uint8_t num_overrides,
-                          const VirtualButton* buttons = nullptr,
+                          const VirtualButton* const* buttons = nullptr,
                           uint8_t num_buttons = 0u,
                           const char* const* root_fragments = nullptr,
-                          uint8_t num_root_fragments = 0u);
+                          uint8_t num_root_fragments = 0u,
+                          const Jack* const* jacks = nullptr,
+                          uint8_t num_jacks = 0u,
+                          const Manual* manual = nullptr,
+                          const uint8_t* factory = nullptr,
+                          size_t factory_len = 0u);
 
 } // namespace hostlink
 } // namespace alchemy

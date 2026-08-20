@@ -7,11 +7,12 @@
  * surfaces serialize with (Pager page/pot grid, Settings slot kinds), and
  * verifies at every stage that its arithmetic matches SerializedSize()
  * and the Presets Manage() order.  Any mismatch latches an error and
- * Finish() returns 0 — the firmware then simply reports "no descriptor"
- * instead of shipping a wrong one.
+ * Finish() returns 0 — never a wrong descriptor.  The RenderDescriptor
+ * wrapper (describe.h) degrades that to a minimal error descriptor so
+ * hosts can show LastError()'s reason.
  *
  * Usage (app code, once at boot, after controls are declared and defaults
- * seeded, before BootLoad):
+ * seeded — before BootLoad, or any time given a Defaults() image):
  *
  *   alchemy::hostlink::DescriptorBuilder db(buf, sizeof buf, presets);
  *   db.Begin({.id="echoa", .name="Echoa", .fw=..., .git=..., .sdk=..., .board="v1"});
@@ -33,6 +34,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "alchemy/host_link/json_writer.h"
+#include "alchemy/surface/see_ref.h"
 
 namespace alchemy {
 
@@ -41,6 +43,8 @@ class Pager;
 class Settings;
 class Serializable;
 class VirtualButton;
+class Jack;
+class Manual;
 
 namespace hostlink {
 
@@ -58,9 +62,15 @@ class DescriptorBuilder
         const char* git;     /* short git hash                    */
         const char* sdk;     /* SDK version                       */
         const char* board;   /* "v1" / "v2"                       */
+        const char* tagline = nullptr; /* one-line identity (manual) */
     };
 
     DescriptorBuilder(char* buf, size_t cap, const Presets& presets);
+
+    /** Factory-state image (a pre-BootLoad SerializeLive blob): field
+     *  defs decode from it, so the render may run after a preset loads.
+     *  Without it defs read live values (factory until the first load). */
+    void Defaults(const uint8_t* blob, size_t len);
 
     bool Begin(const ModuleInfo& m);
 
@@ -75,12 +85,17 @@ class DescriptorBuilder
      */
     bool BeginPager(const char* id, const Pager& pager,
                     const char* const* page_names  = nullptr,
-                    const char* const* page_colors = nullptr);
+                    const char* const* page_colors = nullptr,
+                    const char* const* page_help   = nullptr);
     /** One field per (page, pot); disp_json may be nullptr for a plain
-     *  percent readout.  def is captured from the pager's stored value. */
+     *  percent readout.  def is captured from the pager's stored value.
+     *  help/see are the manual prose keys (protocol §5, additive) — see
+     *  refs resolve + validate at Finish(). */
     bool PagerField(uint8_t page, uint8_t pot,
                     const char* field_id, const char* name,
-                    const char* disp_json);
+                    const char* disp_json,
+                    const char* help = nullptr,
+                    const SeeRef* see = nullptr, uint8_t num_see = 0u);
     /** Optional alternate position→field mapping (row-major page-major
      *  array of pages×pots field ids), active when the enum field named
      *  @p layout_from selects zone 1.  @p count must equal
@@ -132,17 +147,22 @@ class DescriptorBuilder
     bool GenericField(const char* id, const char* name, uint32_t off,
                       FieldType type, float def, uint16_t zones,
                       const char* disp_json,
-                      int16_t page = -1, int16_t pot = -1);
+                      int16_t page = -1, int16_t pot = -1,
+                      const char* help = nullptr,
+                      const SeeRef* see = nullptr, uint8_t num_see = 0u);
     bool EndComponent();
 
     /* ── Settings component ─────────────────────────────────────── */
-    /** Page names/colors as in BeginPager (Settings::NumPages() entries). */
+    /** Page names/colors/help as in BeginPager (Settings::NumPages() entries). */
     bool BeginSettings(const char* id, const Settings& settings,
                        const char* const* page_names  = nullptr,
-                       const char* const* page_colors = nullptr);
+                       const char* const* page_colors = nullptr,
+                       const char* const* page_help   = nullptr);
     bool SettingsField(uint8_t page, uint8_t pot,
                        const char* field_id, const char* name,
-                       const char* disp_json);
+                       const char* disp_json,
+                       const char* help = nullptr,
+                       const SeeRef* see = nullptr, uint8_t num_see = 0u);
     bool EndSettings();
 
     /* ── Buttons component (kind "buttons", protocol §5.5) ──────────
@@ -166,12 +186,27 @@ class DescriptorBuilder
      * a no-op — the key is omitted entirely, preserving descriptor
      * bytes on modules that expose no button metadata. */
     bool Buttons(const VirtualButton* buttons, uint8_t count);
+    bool Buttons(const VirtualButton* const* buttons, uint8_t count);
 
     template <size_t N>
     bool Buttons(const VirtualButton (&buttons)[N])
     {
         return Buttons(buttons, static_cast<uint8_t>(N));
     }
+
+    /* ── Jacks (top-level, optional) ────────────────────────────── */
+    bool Jacks(const Jack* jacks, uint8_t count);
+    bool Jacks(const Jack* const* jacks, uint8_t count);
+
+    template <size_t N>
+    bool Jacks(const Jack (&jacks)[N])
+    {
+        return Jacks(jacks, static_cast<uint8_t>(N));
+    }
+
+    /* ── Manual root block (top-level, optional) ────────────────────
+     * "manual":{preamble, sections[], presets:{help}}. */
+    bool ManualBlock(const Manual* manual);
 
     /* ── Raw root fragments (top-level, optional) ───────────────────
      * Splice a `"key":value` fragment (no surrounding braces) into the
@@ -195,6 +230,9 @@ class DescriptorBuilder
 
     bool GenericMetaUInt(const char* key, uint32_t value);
 
+    /** String meta, JSON-escaped (component-level "help"). */
+    bool GenericMetaStr(const char* key, const char* value);
+
     /** Close all structures and validate totals — including that every
      *  cross-field ref (a button's anchor, a root-array controls entry)
      *  names a field some component emitted; Manage() order is
@@ -210,19 +248,34 @@ class DescriptorBuilder
     static constexpr uint8_t  kMaxSettingsPages = 4u;
     static constexpr uint8_t  kMaxPots          = 8u;
     static constexpr uint16_t kMaxFieldIds      = 192u;
-    static constexpr uint8_t  kMaxRefs          = 24u;
+    static constexpr uint8_t  kMaxRefs          = 96u;
 
     bool CheckManaged(const Serializable& s);
     void OpenComponent(const char* id, const char* kind,
                        const Serializable& s);
     void EmitPageMeta(const char* const* names, const char* const* colors,
-                      uint8_t num_pages);
+                      const char* const* help, uint8_t num_pages);
     void EmitRootButtons();
+    void EmitRootJacks();
+    void EmitManualBlock();
 
     bool Fail(const char* msg);
     bool FailRef(const char* kind, const char* target, const char* what);
     bool RecordFieldId(const char* id);
-    bool RecordRef(const char* kind, const char* target);
+    /** Non-field ids (buttons, jacks, "presets"): see/norm targets,
+     *  never anchor/controls targets. */
+    bool RecordExtraId(const char* id);
+    bool RecordRef(const char* kind, const char* target,
+                   bool fields_only = false);
+
+    bool DefF32(uint32_t abs_off, float* v);
+    bool DefByte(uint32_t abs_off, uint8_t* v);
+
+    /** Resolved id, or nullptr (build failed with a clear message). */
+    const char* ResolveSee(const SeeRef& r, char* buf, size_t cap);
+    /** Emit "help"/"see" for the open object; records refs for Finish(). */
+    bool EmitHelpSee(const char* help, const SeeRef* see, uint8_t num_see);
+    bool EmitButtonManual(const VirtualButton& b);
 
     /** Field ids are hashed, never retained: callers may build an id in
      *  a scratch buffer (the pager's positional "p<page>.<pot>"), so a
@@ -231,6 +284,9 @@ class DescriptorBuilder
 
     JsonWriter     w_;
     const Presets& presets_;
+
+    const uint8_t* defs_     = nullptr;
+    size_t         defs_len_ = 0u;
 
     bool     error_       = false;
     uint8_t  comp_index_  = 0u;
@@ -252,22 +308,30 @@ class DescriptorBuilder
     const Settings* settings_ = nullptr;
     int16_t         offsets_[kMaxSettingsPages][kMaxPots];
 
-    /* Buttons stashed for emission during Finish().  Pointer is
-     * non-owning — the caller keeps the array alive. */
-    const VirtualButton* buttons_     = nullptr;
-    uint8_t              num_buttons_ = 0u;
+    static constexpr uint8_t kMaxRootButtons = 8u;
+    static constexpr uint8_t kMaxJacks       = 16u;
+
+    /* Stashed for emission during Finish(); non-owning. */
+    const VirtualButton* btn_ptrs_[kMaxRootButtons] = {};
+    uint8_t              num_buttons_               = 0u;
+    const Jack*          jack_ptrs_[kMaxJacks]      = {};
+    uint8_t              num_jacks_                 = 0u;
+    const Manual*        manual_                    = nullptr;
+    bool                 emit_manual_               = false;
 
     /* Raw root fragments stashed for emission during Finish(). */
     const char* root_fragments_[kMaxRootFragments] = {};
     uint8_t     num_root_fragments_                = 0u;
 
-    /* Ref validation: hashes of every emitted field id, plus every
-     * cross-field ref, matched in Finish().  Ref targets come from
-     * VirtualButton, whose strings are static by contract, so those
-     * pointers are safe to hold for the error message. */
-    struct Ref { const char* kind; const char* target; };
+    /* Ref hashes are taken at record time (scratch-buffer ids stay
+     * valid); `target` is for the error message only, may be nullptr. */
+    struct Ref { const char* kind; const char* target; uint32_t hash;
+                 bool fields_only; };
+    static constexpr uint8_t kMaxExtraIds = 64u;
     uint32_t field_ids_[kMaxFieldIds] = {};
     uint16_t num_field_ids_           = 0u;
+    uint32_t extra_ids_[kMaxExtraIds] = {};
+    uint8_t  num_extra_ids_           = 0u;
     Ref      refs_[kMaxRefs]          = {};
     uint8_t  num_refs_                = 0u;
     const char* err_                  = nullptr;
