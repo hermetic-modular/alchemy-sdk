@@ -1,6 +1,7 @@
 /**
  * @file alchemy_lab_v2.cpp
- * @brief alchemy::AlchemyLabV2 — Init / ProcessAllControls / StartAudio.
+ * @brief alchemy::AlchemyLabV2 — Init / ProcessAllControls / StartAudio /
+ *        FlushCvOutputs.
  *
  * Production scope: Seed + audio, ADC (pots + CV), B1/B2 on-MCU buttons,
  * I²C1 + PCA9557 expander + B3, WS2812 + LedPanel, MCP4728 quad DAC,
@@ -129,7 +130,7 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
             cv_jacks[i].InitMcp(
                 seed.adc.GetPtr(kCvAdcOffset + i), sr, cal, cal_vdda,
                 &dac, src,
-                &mcp_shadow_[src], mcp_shadow_,
+                &mcp_shadow_[src], mcp_shadow_, &mcp_dirty_,
                 &expander, route.select_io, kPca9557IoLdac);
         }
         else
@@ -168,6 +169,23 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
             (void)f_mount(&fatfs.GetSDFileSystem(), fatfs.GetSDPath(), 0);
         }
     }
+}
+
+bool AlchemyLabV2::FlushCvOutputs()
+{
+    if (!mcp_dirty_)
+        return true;
+    if (!mcp4728_ready_ || !expander_ready_)
+        return false;
+
+    if (!dac.WriteAll(mcp_shadow_[0], mcp_shadow_[1], mcp_shadow_[2], mcp_shadow_[3]))
+        return false;
+        
+    if (!dac.PulseLdac(expander, kPca9557IoLdac))
+        return false;
+
+    mcp_dirty_ = false;
+    return true;
 }
 
 void AlchemyLabV2::ProcessAllControls()
