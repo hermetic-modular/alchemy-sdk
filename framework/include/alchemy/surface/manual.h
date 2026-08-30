@@ -34,7 +34,17 @@ inline constexpr const char* kPresets =
 inline constexpr const char* kLocks =
     "Parameter locks are short automation loops recorded from the panel: "
     "hold the lock gesture and move a knob to capture the motion, and the "
-    "module replays it as part of the patch.";
+    "module replays it as part of the patch. Recording starts the moment "
+    "the knob moves; another nudge on a knob that is already looping "
+    "clears its lock. In **Clocked** mode (where the module offers it) a "
+    "new loop restarts on the nearest musical division and stays in time "
+    "with the clock.";
+
+inline constexpr const char* kLockMode =
+    "How new parameter-lock recordings are timed. **Free** replays a loop "
+    "at exactly the length it was recorded. **Clocked** restarts the loop "
+    "on the nearest musical division of the clock, staying in time "
+    "through tempo changes.";
 
 inline constexpr const char* kStorage =
     "The SD card holds files the firmware reads and writes. Browse and "

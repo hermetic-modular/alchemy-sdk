@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include "alchemy/control/lock_types.h"      /* LockSync */
 #include "alchemy/control/pot_catch.h"
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots */
 #include "alchemy/hw/i_button.h"
@@ -27,6 +28,8 @@
 #include "alchemy/surface/settings_control.h"
 
 namespace alchemy {
+
+class LockSource;
 
 #if defined(ALCHEMY_BOARD_V2)
 class AlchemyLabV2;
@@ -84,6 +87,53 @@ class Settings : public Serializable
      * @p store .Save() / .Load() directly.
      */
     PresetGestureUi& UsePresets(Presets& store);
+
+    /** Handle returned by UseLocks — a two-zone selector bound to a
+     *  LockSource's sync mode.  `.At(page, pot)` relocates it. */
+    class LocksHandle
+    {
+      public:
+        LocksHandle() = default;
+        LocksHandle(Settings* owner, uint8_t page, uint8_t pot)
+            : owner_(owner), page_(page), pot_(pot) {}
+
+        /** Move the control to another (page, pot). */
+        LocksHandle& At(uint8_t page, uint8_t pot);
+
+        /** Boot-time mode before any preset loads (default Free). */
+        LocksHandle& Default(LockSync m);
+
+        /** Zone palette override: 2 colors, {Free, Clocked}. */
+        LocksHandle& Colors(const LedPanel::Rgb* palette);
+
+        /* Identity + prose (see SettingsSlot). */
+        LocksHandle& Ident(const char* id);
+        LocksHandle& Name (const char* n);
+        LocksHandle& Help (const char* md);
+
+        /** Currently selected mode. */
+        LockSync Value() const;
+
+      private:
+        SettingsSlot* Slot() const;
+
+        Settings* owner_ = nullptr;
+        uint8_t   page_  = 0;
+        uint8_t   pot_   = 0;
+    };
+
+    /**
+     * Param-lock mode control: a persisted Free / Clocked selector bound
+     * to @p locks (any LockSource — normally a ParamLock).  Defaults to
+     * (page=0, pot=1): P1 brightness, P2 lock mode, P3–P4 presets.
+     * Persisted like brightness and pushed into the lock via
+     * LockSource::SetSyncMode() whenever it changes or loads; the mode
+     * applies to NEW recordings only.
+     *
+     * Call after locks.UseClock(...): offering "Clocked" on a module
+     * with no clock wired is asserted against in debug builds.
+     */
+    LocksHandle UseLocks(LockSource& locks);
 
     /* ── Declarative custom controls ─────────────────────────────── */
 
@@ -254,6 +304,13 @@ class Settings : public Serializable
 
   private:
     friend class PotBuilder;
+    friend class BrightnessHandle;   /* At() relocation */
+
+    /** Move a slot's whole configuration to another (page, pot),
+     *  clearing the source.  Shared by every handle's At().  Returns the
+     *  destination slot, or nullptr for out-of-range coordinates. */
+    SettingsSlot* RelocateSlot(uint8_t from_page, uint8_t from_pot,
+                               uint8_t to_page,   uint8_t to_pot);
 
     const SettingsSlot* SlotAt(uint8_t page, uint8_t pot) const
     {

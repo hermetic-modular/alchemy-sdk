@@ -32,7 +32,9 @@
 
 namespace alchemy {
 
+class LockSource;
 class PresetGestureUi;
+class Settings;
 struct SettingsSlot;
 
 /* ── Per-slot kind enum ────────────────────────────────────────────── */
@@ -91,6 +93,10 @@ struct SettingsSlot
     /* Preset gesture binding — both halves point at the same UI. */
     PresetGestureUi* preset_gesture = nullptr;
 
+    /* Lock-mode binding (Settings::UseLocks): the resolved zone index is
+     * pushed via SetSyncMode() on change and on Deserialize. */
+    LockSource* lock_src = nullptr;
+
     /* Custom. */
     SettingsTickFn   custom_tick   = nullptr;
     SettingsRenderFn custom_render = nullptr;
@@ -123,6 +129,14 @@ class BrightnessHandle
   public:
     BrightnessHandle() = default;
     explicit BrightnessHandle(SettingsSlot* s) : s_(s) {}
+    BrightnessHandle(Settings* owner, SettingsSlot* s,
+                     uint8_t page, uint8_t pot)
+        : s_(s), owner_(owner), page_(page), pot_(pot) {}
+
+    /** Move the control to another (page, pot).  Handles returned by
+     *  Settings know their owner and relocate; a default-constructed or
+     *  slot-only handle no-ops.  Defined in settings.cpp. */
+    BrightnessHandle& At(uint8_t page, uint8_t pot);
 
     BrightnessHandle& Range(float lo, float hi)
     { if (!s_) return *this; s_->range_lo = lo; s_->range_hi = hi; return *this; }
@@ -168,7 +182,10 @@ class BrightnessHandle
         return (t < 0.0f) ? 0.0f : (t > 1.0f ? 1.0f : t);
     }
 
-    SettingsSlot* s_ = nullptr;
+    SettingsSlot* s_     = nullptr;
+    Settings*     owner_ = nullptr;
+    uint8_t       page_  = 0;
+    uint8_t       pot_   = 0;
 };
 
 class KnobHandle

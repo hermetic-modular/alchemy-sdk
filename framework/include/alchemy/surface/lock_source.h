@@ -26,6 +26,21 @@ class LockSource
     /** Modulation delta for one (page, pot) slot. ISR-safe; cheap. */
     virtual float DeltaAtPage(uint8_t page, uint8_t pot) const = 0;
 
+    /* ── Sync-mode binding (Settings::UseLocks) ──────────────────────
+     * Free/Clocked as a raw byte so Settings can push a selector index
+     * without knowing the concrete lock type.  Defaults are no-ops so
+     * custom automation sources are unaffected. */
+
+    /** Set the sync mode (0 = free, 1 = clocked; see alchemy::LockSync). */
+    virtual void    SetSyncMode(uint8_t /*mode*/) {}
+
+    /** Current sync mode as a selector index. */
+    virtual uint8_t SyncMode() const { return 0u; }
+
+    /** True when a musical clock is wired (Clocked mode is meaningful).
+     *  Default true so custom sources aren't nagged by UseLocks' guard. */
+    virtual bool    HasClock() const { return true; }
+
     /** True if the (page, pot) slot is recording. */
     virtual bool  IsRecordingAtPage(uint8_t page, uint8_t pot) const = 0;
 

@@ -17,9 +17,12 @@
 #include <cstring>
 #include <vector>
 
+#include "alchemy/control/lock_snap.h"
+#include "alchemy/control/musical_clock.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/param_lock.h"
 #include "alchemy/surface/presets.h"
+#include "alchemy/surface/settings.h"
 
 using namespace alchemy;
 
@@ -96,8 +99,10 @@ constexpr float kRest = 0.5f;
  *
  * The first frame stays at kRest because OnButtonDown snapshots the
  * baseline there — a gesture already displaced on the press frame arms
- * nothing.  So the lock arms on values[0]: record_base == values[0], and
- * the recorded samples are `values`.
+ * nothing.  The lock arms on values[0], and record_base is the PRE-nudge
+ * baseline (kRest): the loop's reference — and a Return exit's home — is
+ * where the hand started, not where the arm threshold tripped.  The
+ * recorded samples are `values`.
  */
 template<class Locks, uint8_t kPots>
 void RecordGesture(Locks& locks, FakeButton& button, uint8_t pot,
@@ -155,14 +160,16 @@ uint32_t FramesPerLoop(Locks& locks, uint8_t pot, uint32_t frame_ms,
 /** Build a raw saved image for one slot (header + samples, zero tail). */
 template<class Locks>
 void PokeSlot(std::vector<uint8_t>& image, uint8_t slot, bool active,
-              float record_base, const std::vector<float>& samples)
+              float record_base, const std::vector<float>& samples,
+              uint16_t musical_ticks = 0u)
 {
     uint8_t* p = image.data() + static_cast<size_t>(slot) * Locks::kBytesPerSavedSlot;
 
     ParamLockSavedHeader h;
-    h.active      = active ? 1u : 0u;
-    h.length      = static_cast<uint16_t>(samples.size());
-    h.record_base = LockQuant(record_base);
+    h.active        = active ? 1u : 0u;
+    h.length        = static_cast<uint16_t>(samples.size());
+    h.record_base   = LockQuant(record_base);
+    h.musical_ticks = musical_ticks;
     std::memcpy(p, &h, sizeof h);
 
     for (size_t i = 0; i < samples.size(); i++)
@@ -218,9 +225,9 @@ void TestConfigConstants()
     PCHECK_EQ(Long::kFramesPerSlot, 600u);
     PCHECK_EQ(Paged::kFramesPerSlot, 600u);
 
-    /* 5-byte header + 2 B per sample, per slot. */
-    PCHECK_EQ(Long::kBytesPerSavedSlot, 5u + 600u * 2u);
-    PCHECK_EQ(Long::kSavedBytes, 6u * (5u + 1200u));
+    /* 7-byte header (PLK2: + musical_ticks) + 2 B per sample, per slot. */
+    PCHECK_EQ(Long::kBytesPerSavedSlot, 7u + 600u * 2u);
+    PCHECK_EQ(Long::kSavedBytes, 6u * (7u + 1200u));
     PCHECK_EQ(Long::kPresetBytes, Long::kSavedBytes);
 
     /* Arena is 2 B per sample and nothing else. */
@@ -230,7 +237,7 @@ void TestConfigConstants()
     /* The headline configurations fit a preset slot. */
     PCHECK(Long::kPresetBytes  <= kPresetBlobCapacity);
     PCHECK(Paged::kPresetBytes <= kPresetBlobCapacity);
-    PCHECK(Paged::kPresetBytes  == 12u * (5u + 1200u));
+    PCHECK(Paged::kPresetBytes  == 12u * (7u + 1200u));
 
     /* RamOnly contributes nothing to a preset but keeps its byte form. */
     using RamOnly = ParamLock<6, LockLength<20, 30, LockStore::RamOnly>>;
@@ -261,7 +268,8 @@ void TestRecordPlaybackRoundTrip()
     ExactLocks locks(button);
     locks.Init();
 
-    /* First swept value arms the lock, so it becomes record_base. */
+    /* The first swept value arms the lock; deltas reference the
+     * PRE-nudge baseline (kRest), the gesture's true origin. */
     const std::vector<float> sweep = {0.6f, 0.7f, 0.8f, 0.9f};
     RecordGesture<ExactLocks, 4>(locks, button, 1, sweep, kExactFrameMs);
 
@@ -275,7 +283,7 @@ void TestRecordPlaybackRoundTrip()
     {
         for (float v : sweep)
         {
-            PCHECK_NEAR(locks.Delta(1), v - sweep.front(), 1e-3f);
+            PCHECK_NEAR(locks.Delta(1), v - kRest, 1e-3f);
             Frame(locks, phys, kExactFrameMs);
         }
     }
@@ -330,8 +338,8 @@ void TestBufferFullAutoArms()
     PCHECK(locks.IsActive(0));
 
     /* kFramesPerSlot samples, one frame each at this cadence. */
-    /* Recorded deltas span 0 .. 0.398; 0.2 is an interior level. */
-    PCHECK_EQ(FramesPerLoop(locks, 0, kExactFrameMs, 0.2f),
+    /* Deltas reference kRest: they span -0.2 .. 0.198; 0.1 is interior. */
+    PCHECK_EQ(FramesPerLoop(locks, 0, kExactFrameMs, 0.1f),
               uint32_t{ExactLocks::kFramesPerSlot});
 }
 
@@ -434,11 +442,12 @@ void TestRecordingBoxAverages()
     PCHECK(locks.IsActive(0));
 
     /* The first stored sample averages the 0.9 arm frame with the 0.5
-     * frames sharing its period, landing inside the raw -0.4 excursion. */
+     * frames sharing its period.  Relative to record_base (kRest, the
+     * pre-nudge baseline) that lands inside the raw +0.4 excursion. */
     const float first = locks.Delta(0);
-    PCHECK(first > -0.4f);
-    PCHECK(first < 0.0f);
-    PCHECK_NEAR(first, (0.9f + 4.0f * 0.5f) / 5.0f - 0.9f, 3e-2f);
+    PCHECK(first < 0.4f);
+    PCHECK(first > 0.0f);
+    PCHECK_NEAR(first, (0.9f + 4.0f * 0.5f) / 5.0f - kRest, 3e-2f);
 }
 
 void TestSlowFrameHoldsLastSample()
@@ -461,7 +470,7 @@ void TestSlowFrameHoldsLastSample()
 
     ParamLockSavedHeader h;
     std::memcpy(&h, out.data(), sizeof h);
-    PCHECK_EQ(h.record_base, LockQuant(0.6f));
+    PCHECK_EQ(h.record_base, LockQuant(kRest));   /* pre-nudge baseline */
     PCHECK(h.length >= 12u);                 /* ~3 frames x 6 samples */
 
     /* Every sample from the second frame on is 0.9, averages and holds
@@ -758,6 +767,964 @@ void TestPresetBudget()
     PCHECK(decltype(locks)::kPresetBytesFree > 5000u);
 }
 
+/* ── 9. Gesture thresholds ─────────────────────────────────────────── */
+
+void TestArmAndClearThresholds()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    /* Below the arm threshold (default 0.005): nothing arms. */
+    RecordGesture<ExactLocks, 4>(locks, button, 0, {0.502f, 0.502f},
+                                 kExactFrameMs);
+    PCHECK(!locks.IsActive(0));
+    PCHECK(!locks.IsRecording(0));
+
+    /* A 0.02 nudge arms — under the OLD single threshold (0.03) this
+     * gesture was silently ignored, which is the timing complaint the
+     * arm/clear split exists to fix. */
+    RecordGesture<ExactLocks, 4>(locks, button, 0, {0.52f, 0.53f},
+                                 kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+
+    /* The same 0.02 nudge on the now-active slot does NOT clear it:
+     * clearing needs the larger clear threshold (default 0.03), so a
+     * brush against a playing pot mid-hold is survivable. */
+    RecordGesture<ExactLocks, 4>(locks, button, 0, {0.52f}, kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+
+    /* A firmer 0.04 nudge clears. */
+    RecordGesture<ExactLocks, 4>(locks, button, 0, {0.54f}, kExactFrameMs);
+    PCHECK(!locks.IsActive(0));
+
+    /* Both thresholds are configurable. */
+    locks.ArmThreshold(0.10f);
+    RecordGesture<ExactLocks, 4>(locks, button, 1, {0.55f}, kExactFrameMs);
+    PCHECK(!locks.IsActive(1));                    /* 0.05 < 0.10 */
+    RecordGesture<ExactLocks, 4>(locks, button, 1, {0.65f, 0.7f},
+                                 kExactFrameMs);
+    PCHECK(locks.IsActive(1));                     /* 0.15 ≥ 0.10 */
+}
+
+/* ── 10. Clocked mode ──────────────────────────────────────────────── */
+
+/* 120 BPM at 96 PPQN: 192 ticks/s — a half note is 192 ticks = 1000 ms.
+ * Rate 50 Hz at 20 ms frames keeps 1 sample per frame. */
+constexpr uint32_t kTestPpqn = 96u;
+
+/** One control frame with the clock ticking, in ControlLoop's order. */
+template<class Locks>
+void ClockedFrame(Locks& locks, MusicalClock& clk, uint32_t& t_us,
+                  const float* phys, uint32_t frame_ms)
+{
+    t_us += frame_ms * 1000u;
+    clk.Tick(t_us);
+    locks.SetFrameMs(frame_ms);
+    locks.PollButtons(0u, false);
+    locks.Advance();
+    locks.Update(phys, 0u);
+}
+
+template<class Locks, uint8_t kPots>
+void ClockedRecordGesture(Locks& locks, MusicalClock& clk, uint32_t& t_us,
+                          FakeButton& button, uint8_t pot,
+                          const std::vector<float>& values, uint32_t frame_ms)
+{
+    float phys[kPots];
+    for (uint8_t i = 0; i < kPots; i++) phys[i] = kRest;
+
+    button.pressed = true;
+    ClockedFrame(locks, clk, t_us, phys, frame_ms);   /* baseline */
+    for (float v : values)
+    {
+        phys[pot] = v;
+        ClockedFrame(locks, clk, t_us, phys, frame_ms);
+    }
+    button.pressed = false;
+    ClockedFrame(locks, clk, t_us, phys, frame_ms);
+}
+
+/** FramesPerLoop with the clock running — crossing-to-crossing. */
+template<class Locks>
+uint32_t ClockedFramesPerLoop(Locks& locks, MusicalClock& clk, uint32_t& t_us,
+                              uint8_t pot, uint32_t frame_ms, float level,
+                              uint32_t limit = 100000u)
+{
+    const float phys[8] = {};
+    float    prev  = locks.Delta(pot);
+    bool     armed = false;
+    uint32_t n     = 0u;
+
+    for (uint32_t i = 0; i < limit; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, frame_ms);
+        n++;
+        const float now = locks.Delta(pot);
+        const bool crossed = (prev < level && now >= level);
+        prev = now;
+        if (!crossed) continue;
+        if (!armed) { armed = true; n = 0u; continue; }
+        return n;
+    }
+    return 0u;
+}
+
+/** A rising n-frame ramp in 0.006 steps: sample k plays back as delta
+ *  0.006·(k+1).  Every step clears the arm threshold, so all n frames
+ *  record.  Default 51 frames = 1020 ms at the 20 ms cadence. */
+std::vector<float> ClockedTestRamp(int n = 51)
+{
+    std::vector<float> ramp;
+    for (int i = 1; i <= n; i++)
+        ramp.push_back(kRest + 0.006f * static_cast<float>(i));
+    return ramp;
+}
+
+/** Drive frames until Delta drops by more than 0.1 (the loop restart),
+ *  then return.  The NEXT ClockedFrame is cycle-frame 1 (sample 1). */
+template<class Locks>
+bool DriveToRestart(Locks& locks, MusicalClock& clk, uint32_t& t_us,
+                    uint8_t pot, uint32_t frame_ms, uint32_t limit = 1000u)
+{
+    const float phys[8] = {};
+    float prev = locks.Delta(pot);
+    for (uint32_t i = 0; i < limit; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, frame_ms);
+        const float now = locks.Delta(pot);
+        if (now < prev - 0.1f) return true;
+        prev = now;
+    }
+    return false;
+}
+
+uint16_t SavedTicks(const std::vector<uint8_t>& image, size_t slot,
+                    size_t bytes_per_slot)
+{
+    ParamLockSavedHeader h;
+    std::memcpy(&h, image.data() + slot * bytes_per_slot, sizeof h);
+    return h.musical_ticks;
+}
+
+void TestClockedLengthSnapsToGrid()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);   /* Clocked */
+
+    /* The motivating case: a 1020 ms take against a 1000 ms half note
+     * loops as exactly the half note — the boundary snaps; the last
+     * ~20 ms of motion is simply never reached. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(), kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+
+    std::vector<uint8_t> image(ExactLocks::kSavedBytes, 0u);
+    locks.Save(image.data());
+    PCHECK_EQ(SavedTicks(image, 0, ExactLocks::kBytesPerSavedSlot), 192u);
+
+    /* 192 ticks at 120 BPM = 1000 ms = 50 frames (51 were recorded). */
+    const uint32_t frames =
+        ClockedFramesPerLoop(locks, clk, t_us, 0, kExactFrameMs, 0.15f);
+    PCHECK(frames >= 49u && frames <= 51u);
+}
+
+void TestClockedTrimsLongTakes()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    /* 55 samples (1100 ms, deltas up to 0.33) snap to the 1000 ms half
+     * note.  The motion must play 1:1 and get RIGHT-TRIMMED: the head
+     * never reaches samples 50..54, so the peak delta is sample 49's
+     * 0.300 — a time-stretch would compress the full 0.33 ramp into the
+     * loop and hit 0.33. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(55), kExactFrameMs);
+
+    const float phys[4] = {};
+    float peak = 0.0f;
+    for (int i = 0; i < 120; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        if (locks.Delta(0) > peak) peak = locks.Delta(0);
+    }
+    PCHECK(peak > 0.29f);
+    PCHECK(peak < 0.31f);
+
+    const uint32_t frames =
+        ClockedFramesPerLoop(locks, clk, t_us, 0, kExactFrameMs, 0.15f);
+    PCHECK(frames >= 49u && frames <= 51u);
+}
+
+void TestClockedHoldsShortTakes()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    /* 45 samples (900 ms) snap to the 1000 ms half note: the motion
+     * plays 1:1 for 45 frames, HOLDS its final value (0.27) for ~5
+     * frames, and restarts on the grid. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(45), kExactFrameMs);
+    PCHECK(DriveToRestart(locks, clk, t_us, 0, kExactFrameMs));
+
+    const float phys[4] = {};
+    float at[54];
+    for (int k = 1; k <= 53; k++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        at[k] = locks.Delta(0);
+    }
+
+    /* 1:1 through the motion: cycle-frame k is sample k, NOT the
+     * 0.9×-stretched sample a fit-to-span playback would give. */
+    PCHECK_NEAR(at[20], 0.006f * 21.0f, 5e-3f);
+    PCHECK_NEAR(at[40], 0.006f * 41.0f, 5e-3f);
+
+    /* The hold tail: parked exactly on the final sample. */
+    PCHECK_NEAR(at[46], 0.006f * 45.0f, 2e-3f);
+    PCHECK(at[47] == at[46]);
+    PCHECK(at[48] == at[46]);
+
+    /* And the restart lands on the 50-frame grid (±1 frame of clock
+     * integration rounding). */
+    int restart = -1;
+    for (int k = 49; k <= 52 && restart < 0; k++)
+        if (at[k] < 0.05f) restart = k;
+    PCHECK(restart >= 49 && restart <= 51);
+}
+
+void TestClockedSnapSurvivesFrameTimingLie()
+{
+    /* The hardware repro: a lock at the stock 30 Hz stored rate on a
+     * control loop that DECLARES 16 ms frames but actually runs ~32 ms
+     * (control_loop.cpp's poll loop adds its work to the nominal delay,
+     * so the real frame period always exceeds frame_ms).  Four beats of
+     * motion at 120 BPM must snap to the whole bar and play back in
+     * full.  Deriving the duration from sample count ÷ rate measured
+     * this take at HALF length — snapping to the half note and trimming
+     * two of the four performed beats. */
+    using RigLocks = ParamLock<4>;               /* LockLength<16, 30> */
+    FakeButton button;
+    RigLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    constexpr uint32_t kDeclaredMs = 16u;
+    constexpr uint32_t kRealMs     = 32u;
+
+    float phys[4] = {kRest, kRest, kRest, kRest};
+    auto lie_frame = [&]()
+    {
+        t_us += kRealMs * 1000u;                 /* reality */
+        clk.Tick(t_us);
+        locks.SetFrameMs(kDeclaredMs);           /* the loop's belief */
+        locks.PollButtons(0u, false);
+        locks.Advance();
+        locks.Update(phys, 0u);
+    };
+
+    /* 63 real frames × 32 ms ≈ 2016 ms ≈ four beats of motion. */
+    button.pressed = true;
+    lie_frame();
+    for (int i = 1; i <= 63; i++)
+    {
+        phys[0] = kRest + 0.006f * static_cast<float>(i);
+        lie_frame();
+    }
+    button.pressed = false;
+    lie_frame();
+    PCHECK(locks.IsActive(0));
+
+    /* Snapped to the whole bar (384 ticks), not the half note. */
+    std::vector<uint8_t> image(RigLocks::kSavedBytes, 0u);
+    locks.Save(image.data());
+    PCHECK_EQ(SavedTicks(image, 0, RigLocks::kBytesPerSavedSlot), 384u);
+
+    /* Restart period spans the full take: 384 ticks = 2000 ms real
+     * = ~62.5 real frames — the whole four beats replay each bar. */
+    float    prev   = locks.Delta(0);
+    bool     armed  = false;
+    uint32_t n      = 0u;
+    uint32_t frames = 0u;
+    for (uint32_t i = 0; i < 4000u && frames == 0u; i++)
+    {
+        lie_frame();
+        n++;
+        const float now_d   = locks.Delta(0);
+        const bool  crossed = (prev < 0.15f && now_d >= 0.15f);
+        prev = now_d;
+        if (!crossed) continue;
+        if (!armed) { armed = true; n = 0u; }
+        else        frames = n;
+    }
+    PCHECK(frames >= 61u && frames <= 64u);
+}
+
+void TestClockedTracksTempoChange()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    /* 45 samples (900 ms), snapped to the 192-tick half note. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(45), kExactFrameMs);
+
+    /* Halve the tempo: the BOUNDARY moves (192 ticks now spans 2000 ms
+     * = 100 frames) but the MOTION does not — it still plays its 45
+     * frames at recorded speed, then holds until the restart. */
+    clk.SetBpm(60.0f);
+    const uint32_t slow =
+        ClockedFramesPerLoop(locks, clk, t_us, 0, kExactFrameMs, 0.15f);
+    PCHECK(slow >= 99u && slow <= 101u);
+
+    PCHECK(DriveToRestart(locks, clk, t_us, 0, kExactFrameMs));
+    const float phys[4] = {};
+    float at20 = 0.f;
+    for (int k = 1; k <= 20; k++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        at20 = locks.Delta(0);
+    }
+    /* Still sample 20 at frame 20 — a stretch-to-span would be at half
+     * that position (~0.063) in the doubled loop. */
+    PCHECK_NEAR(at20, 0.006f * 21.0f, 5e-3f);
+
+    /* Double the tempo past the motion length: 192 ticks = 500 ms = 25
+     * frames — the take is truncated to the first 25 samples each pass. */
+    clk.SetBpm(240.0f);
+    const uint32_t fast =
+        ClockedFramesPerLoop(locks, clk, t_us, 0, kExactFrameMs, 0.10f);
+    PCHECK(fast >= 24u && fast <= 26u);
+}
+
+void TestClockedFollowsTransportStop()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(), kExactFrameMs);
+
+    const float phys[4] = {};
+    for (int i = 0; i < 10; i++) ClockedFrame(locks, clk, t_us, phys,
+                                              kExactFrameMs);
+
+    /* Transport stop halts MasterTick — the loop freezes in place. */
+    clk.Stop();
+    ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);   /* applies stop */
+    const float held = locks.Delta(0);
+    for (int i = 0; i < 25; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        PCHECK(locks.Delta(0) == held);
+    }
+
+    /* Start resumes advancement. */
+    clk.Start();
+    bool moved = false;
+    for (int i = 0; i < 5; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        if (locks.Delta(0) != held) moved = true;
+    }
+    PCHECK(moved);
+}
+
+void TestClockResetReAnchors()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(), kExactFrameMs);
+
+    /* Reset() zeroes MasterTick — the loop must re-anchor, not compute
+     * a negative phase.  Loop length is preserved. */
+    clk.Reset();
+    const uint32_t frames =
+        ClockedFramesPerLoop(locks, clk, t_us, 0, kExactFrameMs, 0.15f);
+    PCHECK(frames >= 49u && frames <= 51u);
+}
+
+void TestClockedFallsBackWithoutRunningClock()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    /* Clocked selected, clock wired but never started: the mature
+     * fallback records the slot free (musical_ticks 0) and it replays
+     * at its recorded wall-clock length. */
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);           /* rate set, but transport never runs */
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    RecordGesture<ExactLocks, 4>(locks, button, 0, ClockedTestRamp(),
+                                 kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+
+    std::vector<uint8_t> image(ExactLocks::kSavedBytes, 0u);
+    locks.Save(image.data());
+    PCHECK_EQ(SavedTicks(image, 0, ExactLocks::kBytesPerSavedSlot), 0u);
+
+    /* All 51 samples replay in 51 frames — wall-clock, no snap. */
+    PCHECK_EQ(FramesPerLoop(locks, 0, kExactFrameMs, 0.15f), 51u);
+}
+
+void TestModeAffectsNewRecordingsOnly()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+    locks.UseClock(clk);
+
+    /* Recorded under Free: stays free forever. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(), kExactFrameMs);
+
+    /* Flip to Clocked (as the Settings selector would); record another. */
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 1,
+                                        ClockedTestRamp(), kExactFrameMs);
+
+    std::vector<uint8_t> image(ExactLocks::kSavedBytes, 0u);
+    locks.Save(image.data());
+    PCHECK_EQ(SavedTicks(image, 0, ExactLocks::kBytesPerSavedSlot), 0u);
+    PCHECK_EQ(SavedTicks(image, 1, ExactLocks::kBytesPerSavedSlot), 192u);
+
+    /* Clocked mode must not touch SAMPLING in any way: the same gesture
+     * recorded under Free and under Clocked stores identical sample
+     * data (same count, same base, same bytes).  The clock names the
+     * restart interval — musical_ticks above — and nothing else. */
+    ParamLockSavedHeader h_free, h_clk;
+    const uint8_t* s_free = image.data();
+    const uint8_t* s_clk  = image.data() + ExactLocks::kBytesPerSavedSlot;
+    std::memcpy(&h_free, s_free, sizeof h_free);
+    std::memcpy(&h_clk,  s_clk,  sizeof h_clk);
+    PCHECK_EQ(h_free.length, h_clk.length);
+    PCHECK_EQ(h_free.record_base, h_clk.record_base);
+    PCHECK_EQ(std::memcmp(s_free + sizeof h_free, s_clk + sizeof h_clk,
+                          static_cast<size_t>(h_free.length)
+                              * sizeof(uint16_t)),
+              0);
+}
+
+void TestRestoredClockedLocksShareAlignment()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+    locks.UseClock(clk);
+
+    /* Two clocked slots restored from a preset anchor at the master
+     * origin, so equal musical lengths come back mutually phase-locked
+     * even though their sample counts differ. */
+    std::vector<uint8_t> image(ExactLocks::kSavedBytes, 0u);
+    PokeSlot<ExactLocks>(image, 0, true, 0.2f,
+                         {0.2f, 0.4f, 0.6f, 0.8f}, 192u);
+    PokeSlot<ExactLocks>(image, 2, true, 0.1f,
+                         {0.1f, 0.3f, 0.5f, 0.7f, 0.9f, 0.9f, 0.1f, 0.5f},
+                         192u);
+    locks.Restore(image.data());
+
+    const float phys[4] = {};
+    for (int i = 0; i < 37; i++)
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+
+    PCHECK_NEAR(locks.PlayPhase(0), locks.PlayPhase(2), 1e-4f);
+    PCHECK(locks.PlayPhase(0) > 0.0f);
+}
+
+/* ── 11. Freeze / ClearSlot / PlayPhase ────────────────────────────── */
+
+void TestFreezeHoldsPlayheads()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+    locks.UseClock(clk);
+
+    /* One free slot, one clocked slot. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        {0.6f, 0.7f, 0.8f, 0.9f},
+                                        kExactFrameMs);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 1,
+                                        ClockedTestRamp(), kExactFrameMs);
+
+    const float phys[4] = {};
+    for (int i = 0; i < 5; i++)
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+
+    PCHECK(!locks.Frozen());
+    locks.Freeze(true);
+    PCHECK(locks.Frozen());
+
+    const float d_free    = locks.Delta(0);
+    const float p_clocked = locks.PlayPhase(1);
+    for (int i = 0; i < 20; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        PCHECK(locks.Delta(0) == d_free);
+        PCHECK(locks.PlayPhase(1) == p_clocked);
+    }
+
+    /* Resume continues from the held position — the clocked anchor is
+     * slid by the frozen span, so there is no jump to "where the clock
+     * got to".  One frame at 20 ms is 1/50th of the 1000 ms loop. */
+    locks.Freeze(false);
+    ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+    float expect = p_clocked + 0.02f;
+    if (expect >= 1.0f) expect -= 1.0f;
+    PCHECK_NEAR(locks.PlayPhase(1), expect, 5e-3f);
+}
+
+/* Recording is unaffected by Freeze — so a recording can also FINISH
+ * while frozen.  Such a slot must not inherit the whole frozen span on
+ * resume: its boundary starts at the resume point. */
+void TestRecordingFinishedWhileFrozen()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);   /* Clocked */
+
+    locks.Freeze(true);
+
+    /* The whole take happens under Freeze.  The span still snaps
+     * normally — duration is measured against the clock, which Freeze
+     * does not stop. */
+    ClockedRecordGesture<ExactLocks, 4>(locks, clk, t_us, button, 0,
+                                        ClockedTestRamp(), kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+
+    std::vector<uint8_t> image(ExactLocks::kSavedBytes, 0u);
+    locks.Save(image.data());
+    PCHECK_EQ(SavedTicks(image, 0, ExactLocks::kBytesPerSavedSlot), 192u);
+
+    /* Held at phase 0 while still frozen. */
+    const float phys[4] = {};
+    for (int i = 0; i < 5; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        PCHECK_NEAR(locks.PlayPhase(0), 0.0f, 1e-6f);
+    }
+
+    /* Resume: the boundary begins here, so the first restart lands one
+     * full span later — 192 ticks = 1000 ms = 50 frames. */
+    locks.Freeze(false);
+    PCHECK_NEAR(locks.PlayPhase(0), 0.0f, 1e-3f);
+
+    uint32_t frames  = 0u;
+    float    prev_ph = locks.PlayPhase(0);
+    for (uint32_t i = 0; i < 200u; i++)
+    {
+        ClockedFrame(locks, clk, t_us, phys, kExactFrameMs);
+        frames++;
+        const float ph = locks.PlayPhase(0);
+        if (ph < prev_ph) break;   /* wrapped: first restart */
+        prev_ph = ph;
+    }
+    PCHECK(frames >= 49u && frames <= 51u);
+}
+
+void TestClearSlotIsIsolated()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    RecordGesture<ExactLocks, 4>(locks, button, 0, {0.6f, 0.7f},
+                                 kExactFrameMs);
+    RecordGesture<ExactLocks, 4>(locks, button, 2, {0.7f, 0.8f},
+                                 kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+    PCHECK(locks.IsActive(2));
+
+    locks.ClearSlot(2);
+    PCHECK(!locks.IsActive(2));
+    PCHECK(locks.Delta(2) == 0.0f);
+    PCHECK(locks.IsActive(0));          /* untouched */
+}
+
+void TestPlayPhaseReportsHeadAndWriteFill()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    std::vector<uint8_t> image(ExactLocks::kSavedBytes, 0u);
+    PokeSlot<ExactLocks>(image, 0, true, 0.5f, {0.5f, 0.6f, 0.7f, 0.8f});
+    locks.Restore(image.data());
+
+    const float phys[4] = {};
+    PCHECK_NEAR(locks.PlayPhase(0), 0.00f, 1e-4f);
+    Frame(locks, phys, kExactFrameMs);
+    PCHECK_NEAR(locks.PlayPhase(0), 0.25f, 1e-3f);
+    Frame(locks, phys, kExactFrameMs);
+    PCHECK_NEAR(locks.PlayPhase(0), 0.50f, 1e-3f);
+
+    /* While recording, PlayPhase is the write head against capacity. */
+    float rec[4] = {kRest, kRest, kRest, kRest};
+    button.pressed = true;
+    Frame(locks, rec, kExactFrameMs);
+    rec[1] = 0.7f;
+    for (int i = 0; i < 10; i++) Frame(locks, rec, kExactFrameMs);
+    PCHECK(locks.IsRecording(1));
+    PCHECK_NEAR(locks.PlayPhase(1),
+                10.0f / static_cast<float>(ExactLocks::kFramesPerSlot),
+                2.0f / static_cast<float>(ExactLocks::kFramesPerSlot));
+    button.pressed = false;
+    Frame(locks, rec, kExactFrameMs);
+}
+
+/* ── 12. Exit modes ────────────────────────────────────────────────── */
+
+void TestLatchExitLeavesBaseAlone()
+{
+    using Locks = ParamLock<4, LockLength<4, 50>>;   /* 1 page × 4 pots */
+    FakeButton lock_btn, page_btn;
+    Pager pager(page_btn, 1, 4);
+    Locks locks(lock_btn, pager);
+    locks.Init();
+
+    /* Catch the pager at the gesture's end position first. */
+    float phys[4] = {kRest, kRest, kRest, kRest};
+    pager.Update(phys, 0u);
+
+    RecordGesture<Locks, 4>(locks, lock_btn, 1, {0.6f, 0.7f, 0.8f},
+                            kExactFrameMs);
+    phys[1] = 0.8f;
+    pager.Update(phys, 0u);
+
+    /* Latch (default): the pot's stored value is wherever the pager put
+     * it — the lock exit wrote nothing. */
+    PCHECK_NEAR(pager.Stored(0, 1), 0.8f, 1e-4f);
+    PCHECK(pager.State(0, 1).caught);
+}
+
+void TestReturnExitRestoresOriginAndRearmsCatch()
+{
+    using Locks = ParamLock<4, LockLength<4, 50>>;
+    FakeButton lock_btn, page_btn;
+    Pager pager(page_btn, 1, 4);
+    Locks locks(lock_btn, pager);
+    locks.Init();
+    locks.ExitMode(LockExit::Return);
+
+    float phys[4] = {kRest, kRest, kRest, kRest};
+    pager.Update(phys, 0u);
+
+    RecordGesture<Locks, 4>(locks, lock_btn, 1, {0.6f, 0.7f, 0.8f},
+                            kExactFrameMs);
+
+    /* The base snapped back to the gesture origin (kRest) and catch
+     * re-armed: the pot, still physically at 0.8, is dead until it
+     * comes back through the stored value. */
+    PCHECK_NEAR(pager.Stored(0, 1), kRest, 1e-4f);
+    PCHECK(!pager.State(0, 1).caught);
+
+    phys[1] = 0.8f;
+    pager.Update(phys, 0u);
+    PCHECK_NEAR(pager.Stored(0, 1), kRest, 1e-4f);   /* still parked */
+    PCHECK(!pager.State(0, 1).caught);
+
+    /* Crossing the origin catches, exactly like a page switch. */
+    phys[1] = 0.45f;
+    pager.Update(phys, 0u);
+    PCHECK(pager.State(0, 1).caught);
+
+    /* Playback reproduces the recording relative to the restored base:
+     * total = stored + delta = recording, exactly as captured. */
+    PCHECK(locks.IsActive(1));
+
+    /* A cleared slot must NOT return-snap: clear pot 1 (a 0.04 nudge,
+     * past the clear threshold) and check stored stays caught wherever
+     * the pot is — the exit hook only touches slots that ended active. */
+    phys[1] = 0.45f;
+    RecordGesture<Locks, 4>(locks, lock_btn, 1, {0.54f}, kExactFrameMs);
+    PCHECK(!locks.IsActive(1));
+    pager.Update(phys, 0u);
+    PCHECK(pager.State(0, 1).caught);
+}
+
+/* ── 13. Pure math: snap table and anim eval ───────────────────────── */
+
+void TestLockSnapTicksTable()
+{
+    constexpr uint8_t kST  = LockGrid::Straight | LockGrid::Triplet;
+    constexpr uint8_t kAll = kST | LockGrid::Dotted;
+
+    /* 96 PPQN, 4/4: quarter 96, half 192, bar 384. */
+
+    /* The motivating cases: near a half note snaps to the half note. */
+    PCHECK_EQ(LockSnapTicks(195.84, 96, 4, kST), 192u);
+    PCHECK_EQ(LockSnapTicks(188.20, 96, 4, kST), 192u);
+
+    /* Near a triplet lands on the triplet (128 = half-note triplet). */
+    PCHECK_EQ(LockSnapTicks(130.0, 96, 4, kST), 128u);
+
+    /* 140 ticks: triplet 128 wins under the default grid… */
+    PCHECK_EQ(LockSnapTicks(140.0, 96, 4, kST), 128u);
+    /* …the dotted quarter (144) wins when dotted is enabled… */
+    PCHECK_EQ(LockSnapTicks(140.0, 96, 4, kAll), 144u);
+    /* …and straight-only has to reach to the half note (ratio beats
+     * the quarter: 192/140 < 140/96). */
+    PCHECK_EQ(LockSnapTicks(140.0, 96, 4, LockGrid::Straight), 192u);
+
+    /* Above one bar, integer bar counts are always in the grid: a
+     * 5.5-bar take goes to 6 bars, never stretched to 4 or 8. */
+    PCHECK_EQ(LockSnapTicks(5.5 * 384.0, 96, 4, kST), 6u * 384u);
+    PCHECK_EQ(LockSnapTicks(4.9 * 384.0, 96, 4, kST), 5u * 384u);
+
+    /* Tiny blips snap up to the smallest enabled candidate. */
+    PCHECK_EQ(LockSnapTicks(3.0, 96, 4, kST), 16u);          /* 16th-t  */
+    PCHECK_EQ(LockSnapTicks(3.0, 96, 4, LockGrid::Straight), 24u);
+
+    /* Degenerate inputs are refused, not guessed at. */
+    PCHECK_EQ(LockSnapTicks(0.0, 96, 4, kST), 0u);
+    PCHECK_EQ(LockSnapTicks(100.0, 0, 4, kST), 0u);
+    PCHECK_EQ(LockSnapTicks(100.0, 96, 0, kST), 0u);
+
+    /* Too long for the u16 saved form: refused, so the slot falls back
+     * to free rather than trimming the take to a far-shorter grid. */
+    PCHECK_EQ(LockSnapTicks(70000.0, 96, 4, kST), 0u);
+    PCHECK_EQ(LockSnapTicks(65000.0, 96, 4, kST), 169u * 384u);
+
+    /* 3/4 time: the bar is 288 ticks, and bar multiples track it. */
+    PCHECK_EQ(LockSnapTicks(2.1 * 288.0, 96, 3, kST), 2u * 288u);
+
+    /* PPQN-independent: nothing assumes 96 — the same musical take
+     * scales with whatever resolution the clock declares. */
+    PCHECK_EQ(LockSnapTicks(2.0 * 195.84, 192, 4, kST), 384u); /* half @192  */
+    PCHECK_EQ(LockSnapTicks(48.9, 24, 4, kST), 48u);           /* half @24   */
+    PCHECK_EQ(LockSnapTicks(2.1 * 72.0, 24, 3, kST), 2u * 72u);/* 2 bars 3/4 */
+}
+
+void TestLockAnimEval()
+{
+    /* Solid: always full, home pip. */
+    PCHECK_NEAR(LockAnimEval(LockAnim::Solid, 123u, 0.7f, false).level,
+                1.0f, 1e-6f);
+    PCHECK(!LockAnimEval(LockAnim::Solid, 123u, 0.7f, false).sweep);
+
+    /* Blink: 2 Hz square off absolute time. */
+    PCHECK_NEAR(LockAnimEval(LockAnim::Blink, 100u, 0.f, false).level,
+                1.0f, 1e-6f);
+    PCHECK_NEAR(LockAnimEval(LockAnim::Blink, 300u, 0.f, false).level,
+                0.0f, 1e-6f);
+    PCHECK_NEAR(LockAnimEval(LockAnim::Blink, 600u, 0.f, false).level,
+                1.0f, 1e-6f);
+
+    /* Breathe: bounded, dim at the trough, full at the crest. */
+    PCHECK_NEAR(LockAnimEval(LockAnim::Breathe, 0u, 0.f, false).level,
+                0.25f, 1e-4f);
+    PCHECK_NEAR(LockAnimEval(LockAnim::Breathe, 1000u, 0.f, false).level,
+                1.0f, 1e-4f);
+
+    /* LoopPulse: flash at the wrap, floor later; solid while recording. */
+    PCHECK_NEAR(LockAnimEval(LockAnim::LoopPulse, 0u, 0.0f, false).level,
+                1.0f, 1e-4f);
+    PCHECK_NEAR(LockAnimEval(LockAnim::LoopPulse, 0u, 0.5f, false).level,
+                0.2f, 1e-4f);
+    PCHECK_NEAR(LockAnimEval(LockAnim::LoopPulse, 0u, 0.5f, true).level,
+                1.0f, 1e-4f);
+
+    /* Sweep: the pip rides the phase. */
+    const LockAnimFrame s = LockAnimEval(LockAnim::Sweep, 0u, 0.3f, false);
+    PCHECK(s.sweep);
+    PCHECK_NEAR(s.sweep_pos01, 0.3f, 1e-6f);
+    PCHECK_NEAR(s.level, 1.0f, 1e-6f);
+}
+
+/* ── 14. Settings::UseLocks binding ────────────────────────────────── */
+
+struct FakeLockSource : LockSource
+{
+    uint8_t mode      = 0u;
+    bool    has_clock = true;
+
+    float DeltaAtPage(uint8_t, uint8_t) const override { return 0.0f; }
+    bool  IsRecordingAtPage(uint8_t, uint8_t) const override { return false; }
+    bool  IsActiveAtPage(uint8_t, uint8_t) const override { return false; }
+    void  Update(const float*, uint32_t) override {}
+
+    void    SetSyncMode(uint8_t m) override { mode = m; }
+    uint8_t SyncMode() const override { return mode; }
+    bool    HasClock() const override { return has_clock; }
+};
+
+void TestSettingsUseLocksBinding()
+{
+    FakeButton b2, b3;
+    Settings settings(b2, b3);
+    FakeLockSource lock;
+
+    auto h = settings.UseLocks(lock);
+
+    /* A plain persisted Selector at P2 — one byte, exactly like any
+     * selector, so it rides presets the way brightness does. */
+    PCHECK(settings.KindAt(0, 1) == SettingsKind::Selector);
+    PCHECK_EQ(settings.ZonesAt(0, 1), 2u);
+    PCHECK_EQ(settings.SerializedSize(), 1u);
+    PCHECK_EQ(lock.mode, 0u);
+    PCHECK(h.Value() == LockSync::Free);
+
+    /* Default() pushes immediately. */
+    h.Default(LockSync::Clocked);
+    PCHECK_EQ(lock.mode, 1u);
+    PCHECK(h.Value() == LockSync::Clocked);
+
+    /* Serialize carries the byte; Deserialize pushes into the lock, so
+     * a preset load re-times future recordings with no menu visit. */
+    uint8_t img = 0xFFu;
+    settings.Serialize(&img);
+    PCHECK_EQ(img, 1u);
+
+    lock.mode = 0u;
+    img       = 1u;
+    PCHECK(settings.Deserialize(&img));
+    PCHECK_EQ(lock.mode, 1u);
+    PCHECK_EQ(settings.SelectorIdxAt(0, 1), 1u);
+
+    /* An out-of-range byte clamps instead of poisoning the zone math. */
+    img = 9u;
+    PCHECK(settings.Deserialize(&img));
+    PCHECK_EQ(settings.SelectorIdxAt(0, 1), 1u);
+
+    /* At() relocates the slot; the handle follows. */
+    h.At(0, 4);
+    PCHECK(settings.KindAt(0, 1) == SettingsKind::None);
+    PCHECK(settings.KindAt(0, 4) == SettingsKind::Selector);
+    PCHECK_EQ(settings.ZonesAt(0, 4), 2u);
+    PCHECK_EQ(settings.SerializedSize(), 1u);
+    h.Default(LockSync::Free);
+    PCHECK_EQ(lock.mode, 0u);
+}
+
+void TestBrightnessHandleAt()
+{
+    FakeButton b2, b3;
+    Settings settings(b2, b3);
+
+    /* The placement override UseBrightness's doc always promised:
+     * relocate, then keep configuring through the moved handle. */
+    auto h = settings.UseBrightness().At(1, 0).Default(0.5f);
+    PCHECK(settings.KindAt(0, 0) == SettingsKind::None);
+    PCHECK(settings.KindAt(1, 0) == SettingsKind::Brightness);
+    PCHECK_EQ(settings.NumPages(), 2u);
+    PCHECK_NEAR(h.Value(), 0.5f, 1e-5f);
+    PCHECK_NEAR(settings.RangeLoAt(1, 0), 0.05f, 1e-6f);
+    PCHECK_EQ(settings.SerializedSize(), sizeof(float));
+
+    /* Out-of-range targets are refused; the handle stays put. */
+    h.At(9, 0).Default(0.8f);
+    PCHECK(settings.KindAt(1, 0) == SettingsKind::Brightness);
+    PCHECK_NEAR(h.Value(), 0.8f, 1e-5f);
+
+    /* Builder-returned handles know their owner too. */
+    auto k = settings.Page(0).Pot(3).Brightness();
+    k.At(2, 5);
+    PCHECK(settings.KindAt(0, 3) == SettingsKind::None);
+    PCHECK(settings.KindAt(2, 5) == SettingsKind::Brightness);
+}
+
 } // namespace
 
 int RunParamLockTests(int& checks, int& failures)
@@ -785,6 +1752,33 @@ int RunParamLockTests(int& checks, int& failures)
     TestShortArenaIsRefused();
     TestPagedSlotAddressing();
     TestPresetBudget();
+
+    TestArmAndClearThresholds();
+
+    TestClockedLengthSnapsToGrid();
+    TestClockedTrimsLongTakes();
+    TestClockedHoldsShortTakes();
+    TestClockedSnapSurvivesFrameTimingLie();
+    TestClockedTracksTempoChange();
+    TestClockedFollowsTransportStop();
+    TestClockResetReAnchors();
+    TestClockedFallsBackWithoutRunningClock();
+    TestModeAffectsNewRecordingsOnly();
+    TestRestoredClockedLocksShareAlignment();
+
+    TestFreezeHoldsPlayheads();
+    TestRecordingFinishedWhileFrozen();
+    TestClearSlotIsIsolated();
+    TestPlayPhaseReportsHeadAndWriteFill();
+
+    TestLatchExitLeavesBaseAlone();
+    TestReturnExitRestoresOriginAndRearmsCatch();
+
+    TestLockSnapTicksTable();
+    TestLockAnimEval();
+
+    TestSettingsUseLocksBinding();
+    TestBrightnessHandleAt();
 
     checks   += s_checks;
     failures += s_failures;

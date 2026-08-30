@@ -985,6 +985,52 @@ static void TestSettingsGesturesEmission()
     (void)mode; (void)gain;
 }
 
+/* Settings::UseLocks is a plain persisted Selector, so it must surface
+ * to hosts as an ordinary editable enum field — one byte in the blob,
+ * two zones, the SDK's Free/Clocked labels. */
+static void TestSettingsUseLocksDescriptor()
+{
+    struct StubLock : LockSource
+    {
+        uint8_t mode = 0u;
+        float DeltaAtPage(uint8_t, uint8_t) const override { return 0.0f; }
+        bool  IsRecordingAtPage(uint8_t, uint8_t) const override { return false; }
+        bool  IsActiveAtPage(uint8_t, uint8_t) const override { return false; }
+        void  Update(const float*, uint32_t) override {}
+        void    SetSyncMode(uint8_t m) override { mode = m; }
+        uint8_t SyncMode() const override { return mode; }
+    };
+
+    RamFlash   flash;
+    AlchemyLab hw;
+    Settings   settings{hw};
+    Presets    presets{g_dummy_qspi};
+    StubLock   lock;
+
+    settings.UseBrightness();
+    settings.UseLocks(lock).Default(LockSync::Clocked);
+    presets.Manage(settings);
+    presets.Init(flash.Ops(), flash.Base());
+
+    static char buf[8192];
+    DescriptorBuilder db(buf, sizeof buf, presets);
+    bool ok = db.Begin({"lockmod", "Locks", "0.0.1", "gitl", "0.1.0", "v1"});
+    ok &= db.BeginSettings("settings", settings);
+    ok &= db.SettingsField(0, 0, "s.bright", "Brightness", nullptr);
+    ok &= db.SettingsField(0, 1, "s.lock_mode", "Lock Mode", nullptr);
+    ok &= db.EndSettings();
+    const uint32_t len = db.Finish();
+    CHECK(ok);
+    CHECK(len > 0u);
+    const std::string json(buf, len);
+
+    /* An enum field with the stock labels and the pushed default. */
+    CHECK(json.find("\"id\":\"s.lock_mode\"") != std::string::npos);
+    CHECK(json.find("\"labels\":[\"Free\",\"Clocked\"]") != std::string::npos);
+    CHECK(json.find("\"zones\":2") != std::string::npos);
+    CHECK_EQ(lock.mode, 1u);
+}
+
 /* ── Descriptor auto-derivation (describe.h) ───────────────────────── */
 
 static const DescriptorBuilder::ModuleInfo kAutoInfo =
@@ -2075,6 +2121,7 @@ int main(int argc, char** argv)
     TestTornWrite();
     TestDescriptorBuilder();
     TestSettingsGesturesEmission();
+    TestSettingsUseLocksDescriptor();
     TestAutoDescribe();
     TestAutoDescribeGenericAndOverrides();
     TestManualEmission();

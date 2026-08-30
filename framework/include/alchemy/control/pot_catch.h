@@ -25,7 +25,9 @@ namespace alchemy {
 /** Proximity window: pot is caught immediately if within this distance. */
 constexpr float    kCatchTolerance             = 0.005f;
 
-/** Minimum physical nudge (0..1) required to start / stop param-lock. */
+/** Legacy single param-lock nudge threshold.  The gesture now uses the
+ *  arm / clear pair in control/lock_types.h (this value became the clear
+ *  default); kept for source compatibility. */
 constexpr float    kParamLockGestureThreshold  = 0.03f;
 
 /** Motion gate: travel off a sleeping stored value required to wake. */
@@ -64,13 +66,17 @@ struct PotState
 
 struct ParamLockSlot
 {
-    bool     active      = false;
-    bool     recording   = false;
-    uint16_t length      = 0;      ///< samples recorded (≤ stride)
-    uint32_t play_pos    = 0;      ///< Q16.16 play position (see above)
-    uint16_t record_base = 0;      ///< quantized pot position at arm time
-    float    rec_accum   = 0.0f;   ///< box-average accumulator (record)
-    uint16_t rec_count   = 0;      ///< frames accumulated toward next sample
+    bool     active        = false;
+    bool     recording     = false;
+    uint16_t length        = 0;    ///< samples recorded (≤ stride)
+    uint32_t play_pos      = 0;    ///< Q16.16 play position (see above)
+    uint16_t record_base   = 0;    ///< quantized pot position at arm time
+    uint16_t musical_ticks = 0;    ///< Clocked loop length in clock ticks;
+                                   ///< 0 = free-running (wall-clock length)
+    float    rec_accum     = 0.0f; ///< box-average accumulator (record)
+    uint16_t rec_count     = 0;    ///< frames accumulated toward next sample
+    double   anchor_tick   = 0.0;  ///< clock position at playback start
+                                   ///< (runtime only; 0 = master origin)
 };
 
 /* The atomicity argument above requires natural alignment. */
