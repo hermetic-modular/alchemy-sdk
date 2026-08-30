@@ -66,16 +66,10 @@ class CvJack
      *  unavailable. */
     bool SetVolts(float volts);
 
-    /** Stage `volts` without latching
-     * 
-     *  J3..J6  — writes the shared MCP shadow and marks it dirty; the value
-     *            reaches the chip on the next AlchemyLabV2::FlushCvOutputs().
-     *            Volts() and the panel both lag until that flush.
-     *  J7..J10 — nothing to batch (the STM DAC write is memory-mapped, the
-     *            codec target is read per audio block), so this is exactly
-     *            SetVolts and the later flush is a no-op for them.
-     *
-     *  Returns false on backend unavailable. */
+    /** Stage `volts` without latching. J3..J6 write the shared MCP shadow,
+     *  applied on the next AlchemyLabV2::FlushCvOutputs(); J7..J10 have
+     *  nothing to batch, so this is exactly SetVolts. Returns false on
+     *  backend unavailable. */
     bool StageVolts(float volts);
 
     /* ── Direction ───────────────────────────────────────────────────── */
@@ -134,9 +128,6 @@ class CvJack
      *  AnalogControl for jacks that have one. Cheap no-op for codec out. */
     void Process();
 
-    /** Volts to DAC code via this jack's linear fit. SetVolts and
-     *  StageVolts both go through here so they round identically.
-     *  Requires cal_ — callers check. */
     uint16_t VoltsToCode(float volts) const;
 
     /* ── Common state ─────────────────────────────────────────────────── */

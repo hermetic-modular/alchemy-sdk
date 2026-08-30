@@ -158,15 +158,6 @@ class AlchemyLabV2
      *  codec-CV shim around it transparently. */
     void StartAudio(daisy::AudioHandle::AudioCallback cb);
 
-    /**
-     * Latch everything staged by CvJack::StageVolts() — one `WriteAll` plus
-     * one `PulseLdac` for all four MCP4728 jacks (J3..J6), about 430 µs at
-     * 400 kHz, versus roughly 1.7 ms for four separate `SetVolts` calls.
-     * Returns immediately when nothing is staged.
-     *
-     * @return false if the MCP or the expander isn't up, or the I²C write
-     *         fails; the staged values stay pending for the next attempt.
-     */
     bool FlushCvOutputs();
 
     /* ── Accessors ─────────────────────────────────────────────────────── */
@@ -207,9 +198,6 @@ class AlchemyLabV2
      *  channel so per-jack SetVolts doesn't disturb the others. */
     uint16_t mcp_shadow_[kMcp4728NumChannels] = { 2048u, 2048u, 2048u, 2048u };
 
-    /** Set by CvJack::StageVolts when mcp_shadow_ moves ahead of the chip;
-     *  cleared by whichever latch pushes it out (FlushCvOutputs, or any
-     *  immediate SetVolts, which sends the whole shadow anyway). */
     bool mcp_dirty_ = false;
 
     /* ── Audio shim plumbing ─────────────────────────────────────────── */

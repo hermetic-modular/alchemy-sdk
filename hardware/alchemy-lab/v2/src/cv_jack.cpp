@@ -110,12 +110,9 @@ float CvJack::Value() const
 
 uint16_t CvJack::VoltsToCode(float volts) const
 {
-    /* Invert the per-jack linear fit, clamp to the 12-bit hardware range.
-       Past the linear region (cal_->dac_{min,max}_linear_code) the output
-       compresses near the DAC's supply rails, so the jack stops tracking
-       the fit — but pushing to 0/4095 still gets us as close to ±5 V as
-       the analog stage physically allows, which matters more than
-       perfect linearity in the last ~100 mV. */
+    /* Invert the per-jack linear fit, clamped to 0..4095. Past the linear
+       region the output compresses near the rails, but full scale still
+       lands closest to ±5 V. */
     float code_f = (volts - cal_->dac_offset_v) / cal_->dac_gain_v_per_code;
     if (code_f < 0.0f)      code_f = 0.0f;
     if (code_f > 4095.0f)   code_f = 4095.0f;
