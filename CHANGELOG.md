@@ -1,3 +1,55 @@
+# Alchemy SDK — unreleased
+
+Shift layers are pages: page navigation became declarative button
+bindings on `Pager`, so a hold-layer gets pot-catch, presets, locks, CV,
+rings, and the descriptor for free (#16).
+
+## Pager navigation bindings
+
+- `Pager(num_pages, num_pots)` + fluent `.Cycle(btn, pages...)`,
+  `.Shift(btn, page)`, `.Latch(btn, a, b)`, `.From(pages...)`.  The
+  classic `Pager(b1, n, m)` constructor is unchanged and equivalent to
+  `.Cycle(b1)` over every page; the serialized image and `'PAG0'` schema
+  are untouched.
+- Shift engages on the press edge and re-arms catch both ways; catch
+  only ever runs on the active page, so a hold cannot smear the pages
+  underneath — no app-side snapshot/restore.
+- The clean-release contract: a hold that edited nothing leaves the
+  release for taps; a used hold claims it.  `Pager::HoldUsed()` is the
+  pull-style read.
+- Latch pairs are sub-pages that occupy one cycle slot and remember
+  their member (the issue-#16 VAR/RND UI).
+- Arbitration built in: gate (Settings) poisoning incl. presses spanning
+  the gate, chord-reach abort on nav-button co-press, one layer at a
+  time, `GoToPage` cancels an active layer.
+- `KnobStorage` gains three defaulted queries — `ConsumesRelease()`
+  (the general form of the `PageButton()` identity check),
+  `HoldClaimed()`, and `IndicatorColor()`.
+- `ButtonBank` suppresses a tap whose release a used hold claimed, and
+  resolves its consume handshake through `ConsumesRelease()` — so latch
+  buttons shadow correctly too.  Hold gestures now make their consume
+  claim at the release (same-frame contract) rather than at fire time.
+- `ControlLoop` paints navigation indicators per button via
+  `IndicatorColor()`.  (It previously painted the page tint on button 0
+  regardless of which button the pager was constructed on.  A custom
+  `KnobStorage` that wants an indicator must implement `PageButton()`
+  or override `IndicatorColor()`.)
+- `ParamLock` banks its record gesture at the trigger's press edge —
+  fixes a latent bug where a mid-hold `GoToPage` silently retargeted an
+  in-flight recording — holds the pager's view latch
+  (`RetainPage`/`ReleasePage`) so a recording started on a layer keeps
+  its surface, and consumes only when its trigger actually carries a
+  release-driven binding.
+- Behavior fix: a pager-button press alive under (or spanning) the
+  Settings gate is poisoned until released, and an edge already latched
+  when the gate rises is dropped; previously the release after the gate
+  lifted still advanced the page.  Layers abort the instant the gate
+  rises, so Settings opens over the base surface.  The consume claim is
+  now frame-scoped (and frame-wide within that frame), per its
+  documented same-frame contract.
+- New: `docs/pages-and-layers.md` and a host test battery
+  (`tests/host/pager_nav_tests.cpp`).
+
 # Alchemy SDK v0.10.0 — 2026-08-19
 
 Modules can now ship their own documentation, and the descriptor build

@@ -148,7 +148,7 @@ void ButtonBank::FireGesture(VirtualButton& b,
 {
     const bool claims =
         storage_ && hw_btns_ && hw < num_hw_
-        && hw_btns_[hw] == storage_->PageButton();
+        && storage_->ConsumesRelease(hw_btns_[hw]);
 
     if (g.fn)
     {
@@ -287,7 +287,20 @@ void ButtonBank::PollButtons(uint32_t t_ms, bool gated, uint8_t active_page)
             hs.hold_fired = 0;
         }
         if (pressed) DispatchHolds(hw, t_ms);
-        if (falling && !hs.hold_any) DispatchTaps(hw);
+        if (falling)
+        {
+            /* A hold fired during this press claims the release now —
+             * the storage's consume contract is same-frame. */
+            if (hs.hold_any && storage_
+                && storage_->ConsumesRelease(hw_btns_[hw]))
+                storage_->ConsumeButton();
+
+            /* A used hold-layer gesture suppresses the trailing tap
+             * exactly as a fired hold does. */
+            if (!hs.hold_any
+                && !(storage_ && storage_->HoldClaimed(hw_btns_[hw])))
+                DispatchTaps(hw);
+        }
     }
 }
 

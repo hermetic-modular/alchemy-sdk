@@ -47,8 +47,9 @@
  *        OnPageChange hook
  *        OnFrame user hook
  *   5. Render: clear → (Settings if active, else: PerfRenderer pass →
- *      custom rings → overdraw → page indicator → ButtonBank colors →
- *      clip light) → OnRender hook → LockSource overlay → leds.Show
+ *      custom rings → overdraw → navigation indicators → ButtonBank
+ *      colors → clip light) → OnRender hook → LockSource overlay →
+ *      leds.Show
  */
 
 #pragma once
