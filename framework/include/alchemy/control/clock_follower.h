@@ -15,9 +15,11 @@
  *     follower_.Update(now_us);
  *     clock_.Tick(now_us);
  *
- * `OnPulse` is reentrant against the poll path: a couple of word stores.
- * Safe to call from an EXTI ISR if a platform wires clock to a GPIO
- * interrupt instead of polling a CV.
+ * Phase error is measured at pulse-stamp time (anchored to
+ * `MusicalClock::LastTickUs`), so the `Update` / `Tick` order is not
+ * load-bearing.  `OnPulse` is ISR-safe against the poll path via a
+ * single-producer ring: safe from an EXTI or UART ISR, one pulse source
+ * at a time.
  */
 
 #pragma once
@@ -109,13 +111,13 @@ class ClockFollower
 
     /* ── Pulse intake ────────────────────────────────────────────────── */
 
-    /** Deposit a rising-edge timestamp (µs) for the next `Update`.  Cheap;
-     *  reentrant against the poll path.  Multiple pulses within a single
-     *  poll interval is implausible at musical tempos — the newest stamp
-     *  wins (spec §4.1). */
+    /** Deposit a rising-edge timestamp (µs).  Cheap; ISR-safe against the
+     *  poll path.  Pulses are ring-buffered so a poll delayed past a
+     *  pulse period (fast clocks + frame work) drops nothing.  Single
+     *  producer: wire one pulse source at a time. */
     void OnPulse(uint32_t stamp_us);
 
-    /** Per-poll work: consume any pending pulse, update period EMA, run
+    /** Per-poll work: drain buffered pulses, update the period EMA, run
      *  the PI controller, detect loss.  Call once per ~1 ms poll. */
     void Update(uint32_t now_us);
 
@@ -138,11 +140,13 @@ class ClockFollower
     void SetGains(float kp, float ki, float ema_alpha);
 
   private:
-    void RecomputeLimits();
-    void HandleLoss(uint32_t now_us);
-    void AnchorPhase();
-    void DeclareLock();
-    void SeedRateFromPeriod();
+    bool   ConsumePulse(uint32_t stamp_us);
+    double FracTickAt(uint32_t stamp_us) const;
+    void   RecomputeLimits();
+    void   HandleLoss(uint32_t now_us);
+    void   AnchorPhase(uint32_t stamp_us);
+    void   DeclareLock(uint32_t stamp_us);
+    void   SeedRateFromPeriod();
 
     MusicalClock* nco_;
 
@@ -157,9 +161,15 @@ class ClockFollower
     float ki_         = kClockPllKi;
     float ema_alpha_  = kClockEmaAlpha;
 
-    /* ── ISR ↔ poll handoff ─────────────────────────────────────────── */
-    volatile uint32_t pulse_stamp_us_ = 0u;
-    volatile bool     pulse_pending_  = false;
+    /* ── ISR ↔ poll handoff: SPSC ring, ISR owns head, `Update` owns
+     *    tail (free-running indices).  8 deep buys 66 ms of poll stall
+     *    at kClockBpmMax / 24 PPQN — beyond `kClockMaxTickDtUs`. ────── */
+    static constexpr uint32_t kPulseRingSize = 8u;
+    static_assert((kPulseRingSize & (kPulseRingSize - 1u)) == 0u,
+                  "free-running ring indices need a power-of-two size");
+    volatile uint32_t pulse_ring_[kPulseRingSize] = {};
+    volatile uint32_t ring_head_ = 0u;
+    volatile uint32_t ring_tail_ = 0u;
 
     /* ── State ──────────────────────────────────────────────────────── */
     bool     locked_            = false;
@@ -168,8 +178,8 @@ class ClockFollower
     uint32_t valid_pulse_count_ = 0u;
     double   period_est_us_     = 0.0;
     double   integrator_        = 0.0;
-    uint64_t last_pulse_tick_   = 0u;
-    double   last_pulse_frac_   = 0.0;
+    uint64_t last_pulse_tick_   = 0u;   /* NCO position at the last     */
+    double   last_pulse_frac_   = 0.0;  /* accepted pulse's stamp time  */
     bool     loss_announced_    = false;
 
     /* ── Validity window (µs) ───────────────────────────────────────── */

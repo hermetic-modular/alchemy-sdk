@@ -190,6 +190,8 @@ class MusicalClock
      *  sub-tick phase error: `delta = (master - anchor_tick) + (frac - anchor_frac)`. */
     double   FracTick() const { return frac_tick_; }
 
+    uint32_t LastTickUs() const { return last_us_; }
+
     /** Continuous position within the current beat, [0, 1). */
     float BeatPhase() const;
 
