@@ -46,6 +46,13 @@ inline constexpr const char* kLockMode =
     "on the nearest musical division of the clock, staying in time "
     "through tempo changes.";
 
+inline constexpr const char* kLockExit =
+    "What the knob does when a lock finishes recording. **Return** snaps "
+    "the value back to where the gesture started and re-arms pot catch, "
+    "so playback reproduces the recorded motion exactly. **Latch** keeps "
+    "the knob where the gesture left it, with playback riding on top as "
+    "an offset.";
+
 inline constexpr const char* kStorage =
     "The SD card holds files the firmware reads and writes. Browse and "
     "manage them from the web programmer's file panel. Avoid removing the "

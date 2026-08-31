@@ -93,9 +93,11 @@ struct SettingsSlot
     /* Preset gesture binding — both halves point at the same UI. */
     PresetGestureUi* preset_gesture = nullptr;
 
-    /* Lock-mode binding (Settings::UseLocks): the resolved zone index is
-     * pushed via SetSyncMode() on change and on Deserialize. */
-    LockSource* lock_src = nullptr;
+    /* Lock bindings (Settings::UseLocks): the resolved selection is
+     * pushed on change and on Deserialize — the zone index via
+     * SetSyncMode(), the mapped LockExit via SetExitMode(). */
+    LockSource* lock_src      = nullptr;
+    LockSource* lock_exit_src = nullptr;
 
     /* Custom. */
     SettingsTickFn   custom_tick   = nullptr;

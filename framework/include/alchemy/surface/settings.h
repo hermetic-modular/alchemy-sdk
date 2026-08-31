@@ -18,7 +18,7 @@
 #pragma once
 
 #include <cstdint>
-#include "alchemy/control/lock_types.h"      /* LockSync */
+#include "alchemy/control/lock_types.h"      /* LockSync, LockExit */
 #include "alchemy/control/pot_catch.h"
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots */
 #include "alchemy/hw/i_button.h"
@@ -88,51 +88,55 @@ class Settings : public Serializable
      */
     PresetGestureUi& UsePresets(Presets& store);
 
-    /** Handle returned by UseLocks — a two-zone selector bound to a
-     *  LockSource's sync mode.  `.At(page, pot)` relocates it. */
+    /** Handle returned by UseLocks — two two-zone selectors bound to a
+     *  LockSource: sync mode and exit policy.  `.At(page, pot)` /
+     *  `.ExitAt(page, pot)` relocate them. */
     class LocksHandle
     {
       public:
         LocksHandle() = default;
-        LocksHandle(Settings* owner, uint8_t page, uint8_t pot)
-            : owner_(owner), page_(page), pot_(pot) {}
+        LocksHandle(Settings* owner, uint8_t page, uint8_t pot,
+                    uint8_t exit_page, uint8_t exit_pot)
+            : owner_(owner), page_(page), pot_(pot),
+              exit_page_(exit_page), exit_pot_(exit_pot) {}
 
-        /** Move the control to another (page, pot). */
+        /** Move the sync-mode control to another (page, pot). */
         LocksHandle& At(uint8_t page, uint8_t pot);
 
-        /** Boot-time mode before any preset loads (default Free). */
+        /** Boot-time sync mode before any preset loads (default Free). */
         LocksHandle& Default(LockSync m);
 
-        /** Zone palette override: 2 colors, {Free, Clocked}. */
+        /** Sync-zone palette override: 2 colors, {Free, Clocked}. */
         LocksHandle& Colors(const LedPanel::Rgb* palette);
 
-        /* Identity + prose (see SettingsSlot). */
+        /* Identity + prose for the sync control (see SettingsSlot). */
         LocksHandle& Ident(const char* id);
         LocksHandle& Name (const char* n);
         LocksHandle& Help (const char* md);
 
-        /** Currently selected mode. */
+        /** Currently selected sync mode. */
         LockSync Value() const;
+
+        /** Move the exit-policy control to another (page, pot). */
+        LocksHandle& ExitAt(uint8_t page, uint8_t pot);
+
+        /** Boot-time exit policy before any preset loads (default Return). */
+        LocksHandle& DefaultExit(LockExit m);
+
+        /** Currently selected exit policy. */
+        LockExit ExitValue() const;
 
       private:
         SettingsSlot* Slot() const;
+        SettingsSlot* ExitSlot() const;
 
-        Settings* owner_ = nullptr;
-        uint8_t   page_  = 0;
-        uint8_t   pot_   = 0;
+        Settings* owner_     = nullptr;
+        uint8_t   page_      = 0;
+        uint8_t   pot_       = 0;
+        uint8_t   exit_page_ = 0;
+        uint8_t   exit_pot_  = 0;
     };
 
-    /**
-     * Param-lock mode control: a persisted Free / Clocked selector bound
-     * to @p locks (any LockSource — normally a ParamLock).  Defaults to
-     * (page=0, pot=1): P1 brightness, P2 lock mode, P3–P4 presets.
-     * Persisted like brightness and pushed into the lock via
-     * LockSource::SetSyncMode() whenever it changes or loads; the mode
-     * applies to NEW recordings only.
-     *
-     * Call after locks.UseClock(...): offering "Clocked" on a module
-     * with no clock wired is asserted against in debug builds.
-     */
     LocksHandle UseLocks(LockSource& locks);
 
     /* ── Declarative custom controls ─────────────────────────────── */

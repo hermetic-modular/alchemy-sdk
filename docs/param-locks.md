@@ -207,14 +207,18 @@ origin, not origin-plus-threshold.
 
 What happens to the knob's base value when the button is released:
 
-- **`LockExit::Latch`** (default) — the pot stays where the gesture left
-  it, and playback rides on top as an offset.
+- **`LockExit::Latch`** (surface default) — the pot stays where the
+  gesture left it, and playback rides on top as an offset.
 - **`LockExit::Return`** — the logical value snaps back to the recorded
   origin and pot-catch re-arms, exactly as if you had switched pages: the
   pot is dead until it passes back through the stored value.  Playback
   reproduces what you recorded, verbatim.  Requires the paged form —
   there has to be a Pager to write the value into — and applies to every
   slot the hold armed, buffer-full auto-arms included.
+
+Like Free/Clocked, the policy is a user decision, so `UseLocks` also
+exposes it as a persisted Settings selector (see below) — where the
+menu is in play, **Return is the default**.
 
 ## Clocked mode
 
@@ -272,26 +276,35 @@ If Clocked is selected but the clock is not running when a recording
 ends — or no clock was ever wired — that slot falls back to free and
 replays at its recorded length.  Nothing refuses to record.
 
-## The settings selector
+## The settings selectors
 
-The Free/Clocked choice is a user decision, so it lives in the Settings
-menu:
+The Free/Clocked choice and the exit policy are user decisions, so they
+live in the Settings menu:
 
 ```cpp
 settings.UseBrightness();          /* P1 (as before)                   */
-settings.UseLocks(locks);          /* P2: Free / Clocked selector      */
 settings.UsePresets(presets);      /* P3–P4 (as before)                */
+settings.UseLocks(locks);          /* P5: Free/Clocked, P6: exit       */
 ```
 
-`UseLocks` is an ordinary persisted selector — one byte in the Settings
-blob, saved and loaded with presets exactly like brightness, editable
-from hosts as a normal enum field — that pushes its value into the lock
-whenever it changes or loads.  It defaults to page 0, pot 1; relocate it
-with `.At(page, pot)`, restyle with `.Colors(...)`, and set the boot
-default with `.Default(LockSync::Clocked)`.
+`UseLocks` installs two ordinary persisted selectors — one byte each in
+the Settings blob, saved and loaded with presets exactly like
+brightness, editable from hosts as normal enum fields — that push their
+values into the lock whenever they change or load.  P5 selects Free or
+Clocked for new recordings.  P6 selects the exit policy: **Return**
+(zone 0, the default — after recording the knob snaps back to the
+original position and pot catch re-arms) or **Latch** (zone 1 — the
+knob stays at its current offset position).  P2 is left free for the
+module, completing the default stack: P1 brightness, P2 free, P3–P4
+presets, P5–P6 locks.
+
+Relocate the pair with `.At(page, pot)` / `.ExitAt(page, pot)`, restyle
+the sync zones with `.Colors(...)`, and set boot defaults with
+`.Default(LockSync::Clocked)` / `.DefaultExit(LockExit::Latch)`.
 
 Call it after `UseClock` — offering "Clocked" on a module with no clock
-wired is a debug-build assert, not a silent lie.
+wired is a debug-build assert, not a silent lie — and only on the paged
+form, since offering "Return" needs a Pager to write into.
 
 ## LED styles
 

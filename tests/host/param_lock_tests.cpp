@@ -1544,6 +1544,40 @@ void TestReturnExitRestoresOriginAndRearmsCatch()
     PCHECK(pager.State(0, 1).caught);
 }
 
+void TestExitModeLockSourceBinding()
+{
+    using Locks = ParamLock<4, LockLength<4, 50>>;
+
+    /* Unpaged: Return has no Pager to write into. */
+    FakeButton btn;
+    Locks unpaged(btn);
+    unpaged.Init();
+    LockSource& u = unpaged;
+    PCHECK(!u.CanReturn());
+    PCHECK_EQ(u.ExitMode(), static_cast<uint8_t>(LockExit::Latch));
+
+    /* Paged: the settings push lands on the surface's exit policy and
+     * behaves exactly like the fluent ExitMode(Return). */
+    FakeButton lock_btn, page_btn;
+    Pager pager(page_btn, 1, 4);
+    Locks locks(lock_btn, pager);
+    locks.Init();
+    LockSource& p = locks;
+    PCHECK(p.CanReturn());
+    p.SetExitMode(static_cast<uint8_t>(LockExit::Return));
+    PCHECK_EQ(p.ExitMode(), static_cast<uint8_t>(LockExit::Return));
+
+    float phys[4] = {kRest, kRest, kRest, kRest};
+    pager.Update(phys, 0u);
+    RecordGesture<Locks, 4>(locks, lock_btn, 1, {0.6f, 0.7f, 0.8f},
+                            kExactFrameMs);
+    PCHECK_NEAR(pager.Stored(0, 1), kRest, 1e-4f);
+    PCHECK(!pager.State(0, 1).caught);
+
+    p.SetExitMode(static_cast<uint8_t>(LockExit::Latch));
+    PCHECK_EQ(p.ExitMode(), static_cast<uint8_t>(LockExit::Latch));
+}
+
 /* ── 13. Pure math: snap table and anim eval ───────────────────────── */
 
 void TestLockSnapTicksTable()
@@ -1638,6 +1672,7 @@ void TestLockAnimEval()
 struct FakeLockSource : LockSource
 {
     uint8_t mode      = 0u;
+    uint8_t exit      = 0u;
     bool    has_clock = true;
 
     float DeltaAtPage(uint8_t, uint8_t) const override { return 0.0f; }
@@ -1648,6 +1683,9 @@ struct FakeLockSource : LockSource
     void    SetSyncMode(uint8_t m) override { mode = m; }
     uint8_t SyncMode() const override { return mode; }
     bool    HasClock() const override { return has_clock; }
+
+    void    SetExitMode(uint8_t m) override { exit = m; }
+    uint8_t ExitMode() const override { return exit; }
 };
 
 void TestSettingsUseLocksBinding()
@@ -1658,44 +1696,67 @@ void TestSettingsUseLocksBinding()
 
     auto h = settings.UseLocks(lock);
 
-    /* A plain persisted Selector at P2 — one byte, exactly like any
-     * selector, so it rides presets the way brightness does. */
-    PCHECK(settings.KindAt(0, 1) == SettingsKind::Selector);
-    PCHECK_EQ(settings.ZonesAt(0, 1), 2u);
-    PCHECK_EQ(settings.SerializedSize(), 1u);
+    /* Two plain persisted Selectors at P5 (sync) and P6 (exit) — one
+     * byte each, exactly like any selector, so they ride presets the
+     * way brightness does.  P2 stays free for the module. */
+    PCHECK(settings.KindAt(0, 1) == SettingsKind::None);
+    PCHECK(settings.KindAt(0, 4) == SettingsKind::Selector);
+    PCHECK(settings.KindAt(0, 5) == SettingsKind::Selector);
+    PCHECK_EQ(settings.ZonesAt(0, 4), 2u);
+    PCHECK_EQ(settings.ZonesAt(0, 5), 2u);
+    PCHECK_EQ(settings.SerializedSize(), 2u);
     PCHECK_EQ(lock.mode, 0u);
     PCHECK(h.Value() == LockSync::Free);
 
-    /* Default() pushes immediately. */
+    /* The exit selector defaults to Return (zone 0) and pushes it. */
+    PCHECK_EQ(lock.exit, static_cast<uint8_t>(LockExit::Return));
+    PCHECK(h.ExitValue() == LockExit::Return);
+    PCHECK_EQ(settings.SelectorIdxAt(0, 5), 0u);
+
+    /* Default() / DefaultExit() push immediately. */
     h.Default(LockSync::Clocked);
     PCHECK_EQ(lock.mode, 1u);
     PCHECK(h.Value() == LockSync::Clocked);
+    h.DefaultExit(LockExit::Latch);
+    PCHECK_EQ(lock.exit, static_cast<uint8_t>(LockExit::Latch));
+    PCHECK(h.ExitValue() == LockExit::Latch);
+    PCHECK_EQ(settings.SelectorIdxAt(0, 5), 1u);
 
-    /* Serialize carries the byte; Deserialize pushes into the lock, so
-     * a preset load re-times future recordings with no menu visit. */
-    uint8_t img = 0xFFu;
-    settings.Serialize(&img);
-    PCHECK_EQ(img, 1u);
+    /* Serialize carries the zone bytes; Deserialize pushes into the
+     * lock, so a preset load restores behavior with no menu visit. */
+    uint8_t img[2] = {0xFFu, 0xFFu};
+    settings.Serialize(img);
+    PCHECK_EQ(img[0], 1u);
+    PCHECK_EQ(img[1], 1u);
 
     lock.mode = 0u;
-    img       = 1u;
-    PCHECK(settings.Deserialize(&img));
+    img[0]    = 1u;   /* Clocked      */
+    img[1]    = 0u;   /* zone 0 = Return */
+    PCHECK(settings.Deserialize(img));
     PCHECK_EQ(lock.mode, 1u);
-    PCHECK_EQ(settings.SelectorIdxAt(0, 1), 1u);
+    PCHECK_EQ(lock.exit, static_cast<uint8_t>(LockExit::Return));
+    PCHECK_EQ(settings.SelectorIdxAt(0, 4), 1u);
+    PCHECK_EQ(settings.SelectorIdxAt(0, 5), 0u);
 
     /* An out-of-range byte clamps instead of poisoning the zone math. */
-    img = 9u;
-    PCHECK(settings.Deserialize(&img));
-    PCHECK_EQ(settings.SelectorIdxAt(0, 1), 1u);
+    img[0] = 9u;
+    img[1] = 9u;
+    PCHECK(settings.Deserialize(img));
+    PCHECK_EQ(settings.SelectorIdxAt(0, 4), 1u);
+    PCHECK_EQ(settings.SelectorIdxAt(0, 5), 1u);
+    PCHECK_EQ(lock.exit, static_cast<uint8_t>(LockExit::Latch));
 
-    /* At() relocates the slot; the handle follows. */
-    h.At(0, 4);
-    PCHECK(settings.KindAt(0, 1) == SettingsKind::None);
-    PCHECK(settings.KindAt(0, 4) == SettingsKind::Selector);
-    PCHECK_EQ(settings.ZonesAt(0, 4), 2u);
-    PCHECK_EQ(settings.SerializedSize(), 1u);
+    /* At() / ExitAt() relocate the slots; the handle follows. */
+    h.At(0, 1).ExitAt(0, 2);
+    PCHECK(settings.KindAt(0, 4) == SettingsKind::None);
+    PCHECK(settings.KindAt(0, 5) == SettingsKind::None);
+    PCHECK(settings.KindAt(0, 1) == SettingsKind::Selector);
+    PCHECK(settings.KindAt(0, 2) == SettingsKind::Selector);
+    PCHECK_EQ(settings.SerializedSize(), 2u);
     h.Default(LockSync::Free);
     PCHECK_EQ(lock.mode, 0u);
+    h.DefaultExit(LockExit::Return);
+    PCHECK_EQ(lock.exit, static_cast<uint8_t>(LockExit::Return));
 }
 
 void TestBrightnessHandleAt()
@@ -1773,6 +1834,7 @@ int RunParamLockTests(int& checks, int& failures)
 
     TestLatchExitLeavesBaseAlone();
     TestReturnExitRestoresOriginAndRearmsCatch();
+    TestExitModeLockSourceBinding();
 
     TestLockSnapTicksTable();
     TestLockAnimEval();

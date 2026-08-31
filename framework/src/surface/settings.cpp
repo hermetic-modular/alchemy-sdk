@@ -85,36 +85,52 @@ BrightnessHandle& BrightnessHandle::At(uint8_t page, uint8_t pot)
     return *this;
 }
 
-/* UseLocks defaults: P2, grey Free / orange Clocked, hostlink identity. */
+/* UseLocks defaults: P5 sync / P6 exit, grey/amber zones, hostlink
+ * identity. */
 namespace {
 
-constexpr uint8_t kLockModeDefaultPot = 1u;
+constexpr uint8_t kLockModeDefaultPot = 4u;
+constexpr uint8_t kLockExitDefaultPot = 5u;
 
-const LedPanel::Rgb kLockModeZoneColors[2] = {
-    {0x60, 0x60, 0x60},   /* Free    — neutral grey   */
-    {0xFF, 0x50, 0x00},   /* Clocked — settings amber */
+const LedPanel::Rgb kLockZoneColors[2] = {
+    {0x60, 0x60, 0x60},   /* zone 0 (default) — neutral grey   */
+    {0xFF, 0x50, 0x00},   /* zone 1           — settings amber */
 };
 
 const char* const kLockModeLabels[2] = {"Free", "Clocked"};
+const char* const kLockExitLabels[2] = {"Return", "Latch"};
+
+/* Exit zones render Return-first; LockExit is Latch = 0. */
+uint8_t ExitModeFromZone(uint8_t zone)
+{
+    return static_cast<uint8_t>(zone == 0u ? LockExit::Return
+                                           : LockExit::Latch);
+}
+
+uint8_t ZoneFromExitMode(LockExit m)
+{
+    return (m == LockExit::Return) ? 0u : 1u;
+}
 
 }  // namespace
 
 Settings::LocksHandle Settings::UseLocks(LockSource& locks)
 {
-    /* A Clocked option on a module with no clock wired would be a lie —
-     * call locks.UseClock(...) first. */
+    /* Options the module cannot honor would be lies: call
+     * locks.UseClock(...) first, and Return needs the paged form. */
     assert(locks.HasClock());
+    assert(locks.CanReturn());
 
     EnsurePage(0u);
     SettingsSlot& s = slots_[0][kLockModeDefaultPot];
-    assert(s.kind == SettingsKind::None);   /* P2 already taken */
+    assert(s.kind == SettingsKind::None);   /* P5 already taken */
     s              = SettingsSlot{};
     s.kind         = SettingsKind::Selector;
     s.num_zones    = 2u;
     s.value_idx    = locks.SyncMode() ? 1u : 0u;
     s.pot.stored   = (static_cast<float>(s.value_idx) + 0.5f) / 2.0f;
     s.pot.caught   = true;
-    s.zone_colors  = kLockModeZoneColors;
+    s.zone_colors  = kLockZoneColors;
     s.labels       = kLockModeLabels;
     s.num_labels   = 2u;
     s.ident        = "lock_mode";
@@ -122,7 +138,26 @@ Settings::LocksHandle Settings::UseLocks(LockSource& locks)
     s.help         = stock_help::kLockMode;
     s.lock_src     = &locks;
     locks.SetSyncMode(s.value_idx);
-    return LocksHandle(this, 0u, kLockModeDefaultPot);
+
+    SettingsSlot& e = slots_[0][kLockExitDefaultPot];
+    assert(e.kind == SettingsKind::None);   /* P6 already taken */
+    e               = SettingsSlot{};
+    e.kind          = SettingsKind::Selector;
+    e.num_zones     = 2u;
+    e.value_idx     = ZoneFromExitMode(LockExit::Return);
+    e.pot.stored    = (static_cast<float>(e.value_idx) + 0.5f) / 2.0f;
+    e.pot.caught    = true;
+    e.zone_colors   = kLockZoneColors;
+    e.labels        = kLockExitLabels;
+    e.num_labels    = 2u;
+    e.ident         = "lock_exit";
+    e.display_name  = "Lock Exit";
+    e.help          = stock_help::kLockExit;
+    e.lock_exit_src = &locks;
+    locks.SetExitMode(ExitModeFromZone(e.value_idx));
+
+    return LocksHandle(this, 0u, kLockModeDefaultPot,
+                       0u, kLockExitDefaultPot);
 }
 
 /* ── LocksHandle ──────────────────────────────────────────────────── */
@@ -184,6 +219,42 @@ LockSync Settings::LocksHandle::Value() const
 {
     const SettingsSlot* s = Slot();
     return (s && s->value_idx) ? LockSync::Clocked : LockSync::Free;
+}
+
+SettingsSlot* Settings::LocksHandle::ExitSlot() const
+{
+    if (!owner_ || exit_page_ >= kSettingsMaxPages || exit_pot_ >= kNumPots)
+        return nullptr;
+    SettingsSlot& s = owner_->slots_[exit_page_][exit_pot_];
+    return (s.lock_exit_src != nullptr) ? &s : nullptr;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::ExitAt(uint8_t page, uint8_t pot)
+{
+    if (!ExitSlot()) return *this;
+    if (owner_->RelocateSlot(exit_page_, exit_pot_, page, pot))
+    {
+        exit_page_ = page;
+        exit_pot_  = pot;
+    }
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::DefaultExit(LockExit m)
+{
+    SettingsSlot* s = ExitSlot();
+    if (!s) return *this;
+    s->value_idx  = ZoneFromExitMode(m);
+    s->pot.stored = (static_cast<float>(s->value_idx) + 0.5f) / 2.0f;
+    s->lock_exit_src->SetExitMode(static_cast<uint8_t>(m));
+    return *this;
+}
+
+LockExit Settings::LocksHandle::ExitValue() const
+{
+    const SettingsSlot* s = ExitSlot();
+    return s ? static_cast<LockExit>(ExitModeFromZone(s->value_idx))
+             : LockExit::Latch;
 }
 
 PresetGestureUi& Settings::UsePresets(Presets& store)
@@ -461,6 +532,8 @@ void Settings::Update(const float* phys, uint32_t t_ms)
                 if (idx >= static_cast<int>(s.num_zones)) idx = s.num_zones - 1;
                 s.value_idx = static_cast<uint8_t>(idx);
                 if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
+                if (s.lock_exit_src)
+                    s.lock_exit_src->SetExitMode(ExitModeFromZone(s.value_idx));
                 break;
             }
 
@@ -717,6 +790,9 @@ bool Settings::Deserialize(const uint8_t* in)
                         s.pot.stored = (static_cast<float>(idx) + 0.5f)
                                      / static_cast<float>(s.num_zones);
                     if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
+                    if (s.lock_exit_src)
+                        s.lock_exit_src->SetExitMode(
+                            ExitModeFromZone(s.value_idx));
                     break;
                 }
                 default:
