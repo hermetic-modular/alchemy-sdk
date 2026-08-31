@@ -27,4 +27,9 @@ target_link_libraries(clock_follower_test PRIVATE alchemy::primitives)
 
 add_test(NAME clock_follower COMMAND clock_follower_test)
 
+add_executable(pot_gate_test pot_gate_test.cpp)
+target_link_libraries(pot_gate_test PRIVATE alchemy::primitives)
+
+add_test(NAME pot_gate COMMAND pot_gate_test)
+
 add_subdirectory(host)

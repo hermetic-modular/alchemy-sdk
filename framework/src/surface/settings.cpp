@@ -302,23 +302,23 @@ void Settings::Update(const float* phys, uint32_t t_ms)
                 break;
 
             case SettingsKind::Brightness:
-                UpdateCatch(s.pot, phys[p]);
+                UpdateCatch(s.pot, phys[p], t_ms);
                 ApplyBrightnessSlot(s);
                 break;
 
             case SettingsKind::Knob:
-                UpdateCatch(s.pot, phys[p]);
+                UpdateCatch(s.pot, phys[p], t_ms);
                 s.value = s.pot.stored;
                 break;
 
             case SettingsKind::Bipolar:
-                UpdateCatch(s.pot, phys[p]);
+                UpdateCatch(s.pot, phys[p], t_ms);
                 s.value = (s.pot.stored - 0.5f) * 2.0f;
                 break;
 
             case SettingsKind::Selector:
             {
-                UpdateCatch(s.pot, phys[p]);
+                UpdateCatch(s.pot, phys[p], t_ms);
                 float v = s.pot.stored;
                 if (v < 0.0f) v = 0.0f;
                 if (v > 1.0f) v = 1.0f;
