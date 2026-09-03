@@ -45,8 +45,10 @@ rings, and the descriptor for free (#16).
   when the gate rises is dropped; previously the release after the gate
   lifted still advanced the page.  Layers abort the instant the gate
   rises, so Settings opens over the base surface.  The consume claim is
-  now frame-scoped (and frame-wide within that frame), per its
-  documented same-frame contract.
+  now scoped: it covers this frame's releases and the release of any
+  bound button held when the claim is made (the mid-hold chord idiom),
+  and otherwise evaporates instead of latching onto a later, unrelated
+  release.
 - New: `docs/pages-and-layers.md` and a host test battery
   (`tests/host/pager_nav_tests.cpp`).
 

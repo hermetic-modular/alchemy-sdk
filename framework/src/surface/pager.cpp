@@ -85,7 +85,15 @@ Pager& Pager::Latch(IButton& b, uint8_t page_a, uint8_t page_b)
 
 /* ── Navigation queries / handshakes ───────────────────────────────────── */
 
-void Pager::ConsumeButton() { consume_ = true; }
+void Pager::ConsumeButton()
+{
+    consume_ = true;
+    for (uint8_t i = 0; i < num_bindings_; i++)
+    {
+        NavBinding& b = bindings_[i];
+        if (b.kind != NavKind::Shift && b.btn->Pressed()) b.poisoned = true;
+    }
+}
 
 const IButton* Pager::PageButton() const
 {

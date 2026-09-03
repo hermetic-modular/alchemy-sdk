@@ -92,13 +92,15 @@ motion (releases process before that frame's catch), so a
 final-millisecond nudge cannot both edit the layer and pass for a clean
 tap.
 
-**Consume is same-frame and generalized.**  A surface firing its own
+**Consume is scoped and generalized.**  A surface firing its own
 gesture on a button that carries a release-driven binding (Cycle *or*
 Latch — test with `KnobStorage::ConsumesRelease`) calls
-`ConsumeButton()` in the same frame, and that release navigates nothing.
-The claim is frame-scoped: unmatched, it evaporates instead of latching
-onto a later, unrelated release.  Consumers still run before the pager
-in the canonical order (`locks.Update` → `pager.Update`).
+`ConsumeButton()`, and that release navigates nothing.  The claim covers
+this frame's releases and the release of any bound button held when the
+claim is made, so a chord handler may claim the moment the chord forms.
+A claim with nothing held evaporates at the end of the frame instead of
+latching onto a later, unrelated release.  Consumers still run before
+the pager in the canonical order (`locks.Update` → `pager.Update`).
 
 ## Arbitration
 

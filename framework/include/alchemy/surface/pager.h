@@ -102,7 +102,9 @@ class Pager : public Serializable, public KnobStorage
      *  Surfaces that may ConsumeButton() must run earlier in the frame. */
     void Update(const float* phys, uint32_t t_ms) override;
 
-    /** Suppress this frame's release-driven navigation (frame-wide). */
+    /** Suppress this frame's release-driven navigation, and that of any
+     *  bound button held right now (a claim with nothing held evaporates
+     *  at the end of the frame). */
     void ConsumeButton() override;
 
     /** The cycle button, for legacy identity checks; nullptr without

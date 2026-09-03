@@ -159,6 +159,35 @@ void TestClassicCycle()
     NCHECK_EQ(pager.ActivePage(), 2u);
 }
 
+/* ── Hold-scoped consume: a claim during a hold owns that release ──── */
+
+void TestHoldClaim()
+{
+    NavRig rig;
+    Pager  pager(rig.btn[0], 3, kPots);
+
+    /* Claim while the button is held (the chord idiom): the release
+     * that ends the hold navigates nothing, however many frames later. */
+    rig.btn[0].p = true;
+    rig.Frame(pager);
+    pager.ConsumeButton();
+    rig.Frame(pager);
+    rig.Frame(pager);
+    rig.btn[0].p = false;
+    rig.Frame(pager);
+    NCHECK_EQ(pager.ActivePage(), 0u);
+
+    /* The release clears it: the next tap cycles as usual. */
+    rig.Tap(pager, 0);
+    NCHECK_EQ(pager.ActivePage(), 1u);
+
+    /* A claim with nothing held still evaporates. */
+    pager.ConsumeButton();
+    rig.Frame(pager);
+    rig.Tap(pager, 0);
+    NCHECK_EQ(pager.ActivePage(), 2u);
+}
+
 /* ── Gate poisoning: presses under or spanning the gate stay inert ─── */
 
 void TestGatePoisoning()
@@ -872,6 +901,7 @@ void TestLockConsumeIdentity()
 int RunPagerNavTests(int& checks, int& failures)
 {
     TestClassicCycle();
+    TestHoldClaim();
     TestGatePoisoning();
     TestShiftLifecycle();
     TestCleanHoldAndPreCaught();
