@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include <initializer_list>
 #include "alchemy/control/lock_types.h"      /* LockSync, LockExit */
 #include "alchemy/control/pot_catch.h"
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots */
@@ -159,6 +160,9 @@ class Settings : public Serializable
         {
             return Selector(static_cast<uint8_t>(N)).Labels(labels);
         }
+
+        /* Braced lists would dangle. */
+        SelectorHandle Selector(std::initializer_list<const char*>) = delete;
 
       private:
         Settings& s_;

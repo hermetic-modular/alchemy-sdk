@@ -71,6 +71,15 @@ rings, and the descriptor for free (#16).
 - New: `docs/pages-and-layers.md` and a host test battery
   (`tests/host/pager_nav_tests.cpp`).
 
+## Builders reject braced-list temporaries (#33)
+
+- Table builders (`Selector`, `Labels`, `Colors`, `Buttons`, `Jacks`)
+  reject a braced list at compile time: it was a temporary, and the
+  retained pointer dangled.  Name the array.
+- `VirtualButton::Colors(ptr, n)` no longer defaults `n`; `.Colors(kArray)`
+  had resolved to this overload with no count, so the zone-count check
+  never ran.
+
 # Alchemy SDK v0.10.0 — 2026-08-19
 
 Modules can now ship their own documentation, and the descriptor build

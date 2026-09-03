@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include "alchemy/control/pot_catch.h"
 #include "alchemy/led/anims/fill.h"
 #include "alchemy/led/anims/selector.h"
@@ -307,6 +308,9 @@ class SelectorHandle
     template <size_t N>
     SelectorHandle& Labels(const char* const (&labels)[N])
     { return Labels(labels, static_cast<uint8_t>(N)); }
+
+    /* Braced lists would dangle. */
+    SelectorHandle& Labels(std::initializer_list<const char*>) = delete;
 
     /* Identity + prose — see BrightnessHandle. */
     SelectorHandle& Ident(const char* id) { if (s_) s_->ident = id; return *this; }

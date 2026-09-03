@@ -111,6 +111,9 @@ changed.
   undoes it); put tap-critical actions on buttons outside the chord.
 - **LED precedence.**  The bank paints after the pager's page tint, so
   a declared mode color wins on a shared button.
+- **Tables are borrowed.**  `Selector`, `Labels`, and `Colors` keep a
+  pointer to the array you pass, so name it with static storage; a
+  braced list is rejected at compile time.
 
 ## Freeze and validity
 

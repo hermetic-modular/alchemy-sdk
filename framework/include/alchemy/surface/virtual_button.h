@@ -49,6 +49,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 
 #include "alchemy/led/panel.h"   /* LedPanel::Rgb */
 #include "alchemy/surface/see_ref.h"
@@ -178,6 +179,9 @@ class VirtualButton
         return *this;
     }
 
+    /* Braced lists would dangle. */
+    VirtualButton& Selector(std::initializer_list<const char*>) = delete;
+
     /** Two-zone state (on/off). */
     constexpr VirtualButton& Toggle() { return Selector(2); }
 
@@ -202,10 +206,13 @@ class VirtualButton
         return Labels(labels, static_cast<uint8_t>(N));
     }
 
+    /* Braced lists would dangle. */
+    VirtualButton& Labels(std::initializer_list<const char*>) = delete;
+
     /** Per-zone LED colors painted by the bank while this button's page
      *  is active.  Count checked against zones at bank freeze (pass
      *  n == 0 to skip the check for a non-array source). */
-    constexpr VirtualButton& Colors(const LedPanel::Rgb* per_zone, uint8_t n = 0)
+    constexpr VirtualButton& Colors(const LedPanel::Rgb* per_zone, uint8_t n)
     {
         colors_     = per_zone;
         num_colors_ = n;
@@ -217,6 +224,9 @@ class VirtualButton
     {
         return Colors(per_zone, static_cast<uint8_t>(N));
     }
+
+    /* Braced lists would dangle. */
+    VirtualButton& Colors(std::initializer_list<LedPanel::Rgb>) = delete;
 
     /* ── Gestures (at most one tap + one hold) ───────────────────────────
      * A stateful button with no declared gesture tap-cycles by default
