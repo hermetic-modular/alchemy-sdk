@@ -33,6 +33,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include "alchemy/host_link/json_writer.h"
 #include "alchemy/surface/see_ref.h"
 
@@ -194,6 +195,9 @@ class DescriptorBuilder
         return Buttons(buttons, static_cast<uint8_t>(N));
     }
 
+    /* Braced lists would dangle. */
+    bool Buttons(std::initializer_list<VirtualButton>) = delete;
+
     /* ── Jacks (top-level, optional) ────────────────────────────── */
     bool Jacks(const Jack* jacks, uint8_t count);
     bool Jacks(const Jack* const* jacks, uint8_t count);
@@ -203,6 +207,9 @@ class DescriptorBuilder
     {
         return Jacks(jacks, static_cast<uint8_t>(N));
     }
+
+    /* Braced lists would dangle. */
+    bool Jacks(std::initializer_list<Jack>) = delete;
 
     /* ── Manual root block (top-level, optional) ────────────────────
      * "manual":{preamble, sections[], presets:{help}}. */

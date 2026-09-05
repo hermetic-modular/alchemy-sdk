@@ -30,6 +30,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 #include "alchemy/hardware_types.h"        /* ArcGeometry */
 #include "alchemy/led/anim_desc.h"         /* ParamSlot, ArcStyle, FillAnim */
 #include "alchemy/led/panel.h"             /* LedPanel, LedPanel::Rgb */
@@ -380,6 +381,9 @@ class VirtualKnob
     {
         return Labels(labels, static_cast<uint8_t>(N));
     }
+
+    /* Braced lists would dangle. */
+    VirtualKnob& Labels(std::initializer_list<const char*>) = delete;
 
     /** Raw display-hint JSON (protocol §5); overrides the derived hint. */
     VirtualKnob& Disp(const char* disp_json) { disp_json_ = disp_json; return *this; }

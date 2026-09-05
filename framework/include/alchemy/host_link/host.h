@@ -48,6 +48,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 
 #include "alchemy/host_link/describe.h"
 #include "alchemy/host_link/host_link.h"
@@ -138,6 +139,9 @@ class Host : public HostService
         return Buttons(buttons, static_cast<uint8_t>(N));
     }
 
+    /* Braced lists would dangle. */
+    Host& Buttons(std::initializer_list<VirtualButton>) = delete;
+
     template <typename... Rest>
     Host& Buttons(const VirtualButton& first, const Rest&... rest)
     {
@@ -156,6 +160,9 @@ class Host : public HostService
     {
         return Jacks(jacks, static_cast<uint8_t>(N));
     }
+
+    /* Braced lists would dangle. */
+    Host& Jacks(std::initializer_list<Jack>) = delete;
 
     template <typename... Rest>
     Host& Jacks(const Jack& first, const Rest&... rest)
