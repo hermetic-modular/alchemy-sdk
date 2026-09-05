@@ -26,6 +26,31 @@ class LockSource
     /** Modulation delta for one (page, pot) slot. ISR-safe; cheap. */
     virtual float DeltaAtPage(uint8_t page, uint8_t pot) const = 0;
 
+    /* ── Sync/exit binding (Settings::UseLocks) ──────────────────────
+     * Behavior modes as raw bytes so Settings can push a selection
+     * without knowing the concrete lock type.  Defaults are no-ops so
+     * custom automation sources are unaffected. */
+
+    /** Set the sync mode (0 = free, 1 = clocked; see alchemy::LockSync). */
+    virtual void    SetSyncMode(uint8_t /*mode*/) {}
+
+    /** Current sync mode as a selector index. */
+    virtual uint8_t SyncMode() const { return 0u; }
+
+    /** True when a musical clock is wired (Clocked mode is meaningful).
+     *  Default true so custom sources aren't nagged by UseLocks' guard. */
+    virtual bool    HasClock() const { return true; }
+
+    /** Set the exit policy (0 = latch, 1 = return; see alchemy::LockExit). */
+    virtual void    SetExitMode(uint8_t /*mode*/) {}
+
+    /** Current exit policy as a LockExit value. */
+    virtual uint8_t ExitMode() const { return 0u; }
+
+    /** True when a Return exit can take effect (ParamLock: paged form).
+     *  Default true so custom sources aren't nagged by UseLocks' guard. */
+    virtual bool    CanReturn() const { return true; }
+
     /** True if the (page, pot) slot is recording. */
     virtual bool  IsRecordingAtPage(uint8_t page, uint8_t pot) const = 0;
 

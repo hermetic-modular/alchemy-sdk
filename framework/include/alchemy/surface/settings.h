@@ -18,6 +18,7 @@
 #pragma once
 
 #include <cstdint>
+#include "alchemy/control/lock_types.h"      /* LockSync, LockExit */
 #include "alchemy/control/pot_catch.h"
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots */
 #include "alchemy/hw/i_button.h"
@@ -27,6 +28,8 @@
 #include "alchemy/surface/settings_control.h"
 
 namespace alchemy {
+
+class LockSource;
 
 #if defined(ALCHEMY_BOARD_V2)
 class AlchemyLabV2;
@@ -84,6 +87,57 @@ class Settings : public Serializable
      * @p store .Save() / .Load() directly.
      */
     PresetGestureUi& UsePresets(Presets& store);
+
+    /** Handle returned by UseLocks — two two-zone selectors bound to a
+     *  LockSource: sync mode and exit policy.  `.At(page, pot)` /
+     *  `.ExitAt(page, pot)` relocate them. */
+    class LocksHandle
+    {
+      public:
+        LocksHandle() = default;
+        LocksHandle(Settings* owner, uint8_t page, uint8_t pot,
+                    uint8_t exit_page, uint8_t exit_pot)
+            : owner_(owner), page_(page), pot_(pot),
+              exit_page_(exit_page), exit_pot_(exit_pot) {}
+
+        /** Move the sync-mode control to another (page, pot). */
+        LocksHandle& At(uint8_t page, uint8_t pot);
+
+        /** Boot-time sync mode before any preset loads (default Free). */
+        LocksHandle& Default(LockSync m);
+
+        /** Sync-zone palette override: 2 colors, {Free, Clocked}. */
+        LocksHandle& Colors(const LedPanel::Rgb* palette);
+
+        /* Identity + prose for the sync control (see SettingsSlot). */
+        LocksHandle& Ident(const char* id);
+        LocksHandle& Name (const char* n);
+        LocksHandle& Help (const char* md);
+
+        /** Currently selected sync mode. */
+        LockSync Value() const;
+
+        /** Move the exit-policy control to another (page, pot). */
+        LocksHandle& ExitAt(uint8_t page, uint8_t pot);
+
+        /** Boot-time exit policy before any preset loads (default Return). */
+        LocksHandle& DefaultExit(LockExit m);
+
+        /** Currently selected exit policy. */
+        LockExit ExitValue() const;
+
+      private:
+        SettingsSlot* Slot() const;
+        SettingsSlot* ExitSlot() const;
+
+        Settings* owner_     = nullptr;
+        uint8_t   page_      = 0;
+        uint8_t   pot_       = 0;
+        uint8_t   exit_page_ = 0;
+        uint8_t   exit_pot_  = 0;
+    };
+
+    LocksHandle UseLocks(LockSource& locks);
 
     /* ── Declarative custom controls ─────────────────────────────── */
 
@@ -254,6 +308,13 @@ class Settings : public Serializable
 
   private:
     friend class PotBuilder;
+    friend class BrightnessHandle;   /* At() relocation */
+
+    /** Move a slot's whole configuration to another (page, pot),
+     *  clearing the source.  Shared by every handle's At().  Returns the
+     *  destination slot, or nullptr for out-of-range coordinates. */
+    SettingsSlot* RelocateSlot(uint8_t from_page, uint8_t from_pot,
+                               uint8_t to_page,   uint8_t to_pot);
 
     const SettingsSlot* SlotAt(uint8_t page, uint8_t pot) const
     {

@@ -18,7 +18,7 @@ void ParamLock<kSlots, Len>::Save(uint8_t* out) const
     /* An inert surface (external arena refused) still owes the caller a
      * full, well-formed image: SerializedSize() promised kSavedBytes, and
      * the manager — which has no stride to work from — would write only
-     * the 5-byte headers, leaving the caller's buffer uninitialised in
+     * the 7-byte headers, leaving the caller's buffer uninitialised in
      * the gaps and putting stack residue into a preset slot. */
     if (!mgr_.IsReady())
     {
@@ -44,9 +44,15 @@ void ParamLock<kSlots, Len>::PollButtons(uint32_t /*t_ms*/, bool gated)
     const bool rising  = pressed && !prev_pressed_;
     const bool falling = !pressed && prev_pressed_;
     prev_pressed_ = pressed;
-    if (gated) return;
-    if (rising)  rising_pending_  = true;
-    if (falling) falling_pending_ = true;
+    if (rising && !gated) rising_pending_ = true;
+    if (falling)
+    {
+        /* A release is never dropped — the manager must see OnButtonUp
+         * so a gated release can't dangle the hold — but one landing
+         * under the gate is poisoned: no tap derives from it. */
+        falling_pending_ = true;
+        if (gated) release_poisoned_ = true;
+    }
 }
 
 template<uint8_t kSlots, class Len>
@@ -69,10 +75,41 @@ void ParamLock<kSlots, Len>::Update(const float* phys, uint32_t /*t_ms*/)
     if (falling_pending_)
     {
         falling_pending_ = false;
+        const bool was_held = mgr_.IsButtonHeld();
         const bool consumed = mgr_.OnButtonUp();
         if (pager_) pager_->ReleasePage();
         if (consumed && pager_ && pager_->ConsumesRelease(trigger_))
             pager_->ConsumeButton();
+
+        /* Classify for TakeCleanRelease: a tap candidate is a release
+         * the manager saw as a hold, unpoisoned, with no gesture. */
+        if (was_held && !release_poisoned_)
+        {
+            release_pending_  = true;
+            release_consumed_ = consumed;
+        }
+        release_poisoned_ = false;
+
+        /* Return exit: every slot THIS hold armed snaps its base back to
+         * the gesture origin and re-arms pot catch.  Cleared slots ended
+         * inactive, so ActionTaken ∧ IsActive excludes them.  Resolves
+         * against the press-edge bank, so a mid-hold page change cannot
+         * retarget the snap. */
+        if (consumed && exit_mode_ == LockExit::Return && pager_)
+        {
+            const uint8_t off = held_offset_;
+            const uint8_t w   = Width();
+            const uint8_t pg  = static_cast<uint8_t>(off / w);
+            for (uint8_t i = 0; i < w; i++)
+            {
+                const uint8_t idx = static_cast<uint8_t>(off + i);
+                if (idx >= kSlots) break;
+                if (mgr_.ActionTaken(i) && mgr_.IsActive(idx))
+                    pager_->SetStored(pg, i,
+                                      LockDequant(slots_[idx].record_base),
+                                      phys);
+            }
+        }
     }
 
     if (mgr_.IsButtonHeld())
@@ -142,19 +179,56 @@ bool ParamLock<kSlots, Len>::AnyActive() const
 }
 
 template<uint8_t kSlots, class Len>
-void ParamLock<kSlots, Len>::Render(LedPanel& panel, uint32_t /*t_ms*/) const
+float ParamLock<kSlots, Len>::PlayPhaseAtPage(uint8_t page, uint8_t pot) const
+{
+    const uint8_t idx = static_cast<uint8_t>(page * Width() + pot);
+    if (idx >= kSlots) return 0.0f;
+    if (mgr_.IsRecording(idx))
+        return static_cast<float>(slots_[idx].length)
+             / static_cast<float>(kFramesPerSlot);
+    return mgr_.Phase(idx);
+}
+
+template<uint8_t kSlots, class Len>
+float ParamLock<kSlots, Len>::PlayPhase(uint8_t pot) const
+{
+    return PlayPhaseAtPage(pager_ ? pager_->Page() : 0u, pot);
+}
+
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::ClearSlot(uint8_t pot)
+{
+    mgr_.ClearSlot(static_cast<uint8_t>(Offset() + pot));
+}
+
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::ClearSlotAtPage(uint8_t page, uint8_t pot)
+{
+    mgr_.ClearSlot(static_cast<uint8_t>(page * Width() + pot));
+}
+
+template<uint8_t kSlots, class Len>
+void ParamLock<kSlots, Len>::Render(LedPanel& panel, uint32_t t_ms) const
 {
     const uint8_t off = Offset();
     const uint8_t w   = Width();
     for (uint8_t i = 0; i < w; i++)
     {
-        const uint8_t idx = static_cast<uint8_t>(off + i);
-        const LedPanel::Rgb red   = {0xFF, 0x00, 0x00};
-        const LedPanel::Rgb green = {0x00, 0xFF, 0x40};
-        if (mgr_.IsRecording(idx))
-            panel.SetRingByHour(i, 6.0f, red);
-        else if (mgr_.IsActive(idx))
-            panel.SetRingByHour(i, 6.0f, green);
+        const uint8_t idx       = static_cast<uint8_t>(off + i);
+        const bool    recording = mgr_.IsRecording(idx);
+        if (!recording && !mgr_.IsActive(idx))
+            continue;
+
+        const LockStyle&    st = recording ? record_style_ : play_style_;
+        const LockAnimFrame f  =
+            LockAnimEval(st.anim, t_ms, PlayPhase(i), recording);
+        if (f.level <= 0.0f)
+            continue;
+
+        /* Sweep orbits clockwise from the 6-o'clock home pip. */
+        float hour = f.sweep ? 6.0f + f.sweep_pos01 * 12.0f : 6.0f;
+        if (hour >= 12.0f) hour -= 12.0f;
+        panel.SetRingByHour(i, hour, LedPanel::Scale(st.color, f.level));
     }
 }
 

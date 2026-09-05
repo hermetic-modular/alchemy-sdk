@@ -17,6 +17,15 @@
  *   on button up:                   bool consumed = mgr.OnButtonUp();
  *   every frame:                    mgr.Advance();         (advances all heads)
  *   when reading slot N:            float mod = mgr.Read(N);
+ *
+ * Clocked mode (optional): give the manager a MusicalClock and set
+ * LockSync::Clocked, and every slot that finishes recording snaps its
+ * loop BOUNDARY to the nearest musical division (control/lock_snap.h).
+ * The motion always replays at the speed it was performed; only the
+ * restart is clock-derived, from absolute clock position, so tempo
+ * changes move the boundary and nothing drifts.  Each slot records its
+ * own timing (ParamLockSlot::musical_ticks), so the mode setting only
+ * affects *new* recordings.
  */
 
 #pragma once
@@ -24,26 +33,32 @@
 #include <cstddef>
 #include <cstdint>
 #include "alchemy/control/lock_length.h"
+#include "alchemy/control/lock_types.h"
 #include "alchemy/control/pot_catch.h"
 
 namespace alchemy {
+
+class MusicalClock;
 
 /** Maximum pots-per-page supported by the gesture engine. */
 constexpr uint8_t kParamLockMaxGestureWidth = 8u;
 
 /**
  * Per-slot header of the serialized form, followed by `stride` little-
- * endian uint16 samples.
+ * endian uint16 samples.  `musical_ticks` is the Clocked loop length in
+ * clock ticks (0 = free-running), so a clocked lock keeps its musical
+ * length under any later tempo.
  */
 struct ParamLockSavedHeader
 {
     uint8_t  active;
     uint16_t length;
     uint16_t record_base;
+    uint16_t musical_ticks;
 } __attribute__((packed));
 
-static_assert(sizeof(ParamLockSavedHeader) == 5u,
-              "ParamLockSavedHeader must pack to 5 bytes");
+static_assert(sizeof(ParamLockSavedHeader) == 7u,
+              "ParamLockSavedHeader must pack to 7 bytes");
 
 /** Configuration handed to ParamLockManager::Init. */
 struct LockConfig
@@ -55,7 +70,8 @@ struct LockConfig
     uint8_t        gesture_width = 0u;     ///< pots per gesture frame
     uint16_t       rate_hz     = 30u;      ///< stored motion sample rate
     uint32_t       frame_ms    = 16u;      ///< control-frame interval
-    float          gesture_threshold = kParamLockGestureThreshold;
+    float          arm_threshold   = kParamLockArmThreshold;
+    float          clear_threshold = kParamLockClearThreshold;
 };
 
 class ParamLockManager
@@ -75,6 +91,24 @@ class ParamLockManager
     /** True once Init() has been given a usable configuration. */
     bool IsReady() const { return slots_ != nullptr && arena_ != nullptr; }
 
+    /* ── Behavior configuration (all optional; see lock_types.h) ─────── */
+
+    /** Musical clock consulted by Clocked mode.  May be null; Clocked
+     *  recordings then fall back to free. */
+    void SetClock(const MusicalClock* clk) { clock_ = clk; }
+    bool HasClock() const                  { return clock_ != nullptr; }
+
+    void     SetSyncMode(LockSync m) { sync_mode_ = m; }
+    LockSync SyncMode() const        { return sync_mode_; }
+
+    void    SetSnapGrid(uint8_t mask) { grid_mask_ = mask; }
+    uint8_t SnapGrid() const          { return grid_mask_; }
+
+    void SetArmThreshold  (float t) { arm_threshold_   = t; }
+    void SetClearThreshold(float t) { clear_threshold_ = t; }
+
+    /* ── Gesture ─────────────────────────────────────────────────────── */
+
     /** Called when the trigger button goes down.  Snapshots baselines. */
     void OnButtonDown(const float phys[]);
 
@@ -88,9 +122,29 @@ class ParamLockManager
      */
     void ProcessGestures(uint8_t offset, const float phys[]);
 
+    /** True if gesture lane @p i (0..gesture_width-1) armed or cleared a
+     *  slot during the current / most recent hold; valid until the next
+     *  OnButtonDown.  Lets the surface exit-policy exactly this hold's
+     *  slots. */
+    bool ActionTaken(uint8_t i) const
+    {
+        return i < kParamLockMaxGestureWidth && action_taken_[i];
+    }
+
+    /* ── Playback ────────────────────────────────────────────────────── */
+
     void Advance();
 
+    /** Hold every play head in place (recording is unaffected).  Clocked
+     *  slots re-anchor on resume so they continue from where they froze
+     *  instead of jumping to where the clock got to. */
+    void SetFrozen(bool on);
+    bool Frozen() const { return frozen_; }
+
     float Read(uint8_t index) const;
+
+    /** Loop phase 0..1 of an active slot's play head (0 for inactive). */
+    float Phase(uint8_t index) const;
 
     bool IsActive   (uint8_t index) const;
     bool IsRecording(uint8_t index) const;
@@ -118,14 +172,21 @@ class ParamLockManager
 
     void Clear();
 
+    /** Reset one slot to its default (inactive) state.  Safe against a
+     *  concurrent audio-ISR Read(): `active` is dropped first, in its own
+     *  store, before the rest of the slot is touched. */
+    void ClearSlot(uint8_t index);
+
     /** Zero the motion arena.  Separate from Clear() because an arena in
      *  a NOLOAD section needs one explicit pass after the memory is up. */
     void ClearArena();
 
   private:
-    void  Finalise();
-    void  EmitSample(ParamLockSlot& lk, uint16_t* buf);
-    float SampleAt(const ParamLockSlot& lk, const uint16_t* buf) const;
+    void   Finalise();
+    void   ActivateSlot(ParamLockSlot& lk);
+    void   EmitSample(ParamLockSlot& lk, uint16_t* buf);
+    float  SampleAt(const ParamLockSlot& lk, const uint16_t* buf) const;
+    double NowTicks() const;
 
     uint16_t*      Buf(uint8_t index)
     {
@@ -144,7 +205,13 @@ class ParamLockManager
     uint16_t       rate_hz_          = 30;
     uint32_t       step_q16_         = 0;
     uint32_t       rec_phase_q16_    = 0;
-    float          gesture_threshold_= kParamLockGestureThreshold;
+    float          arm_threshold_    = kParamLockArmThreshold;
+    float          clear_threshold_  = kParamLockClearThreshold;
+    const MusicalClock* clock_       = nullptr;
+    LockSync       sync_mode_        = LockSync::Free;
+    uint8_t        grid_mask_        = LockGrid::Default;
+    bool           frozen_           = false;
+    double         freeze_tick_      = 0.0;
     float          baseline_   [kParamLockMaxGestureWidth] = {};
     bool           action_taken_[kParamLockMaxGestureWidth] = {};
     bool           button_held_ = false;

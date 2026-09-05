@@ -38,17 +38,36 @@
  *
  * Saving into a preset is just presets.Manage(locks).  Save()/Restore()
  * expose the raw bytes by hand — the only route for LockStore::RamOnly.
+ *
+ * Behavior is configured with optional fluent calls (defaults shown):
+ *
+ *   locks.UseClock(clock_)                 // enables Clocked mode
+ *        .SnapGrid(LockGrid::Default)      // Straight | Triplet
+ *        .ArmThreshold(0.005f)
+ *        .ClearThreshold(0.03f)
+ *        .ExitMode(LockExit::Latch)        // Return needs the paged form
+ *        .RecordStyle({0xFF,0,0}, LockAnim::Solid)
+ *        .PlayStyle  ({0xFF,0,0}, LockAnim::Blink);
+ *
+ * The Free/Clocked choice and the exit policy are Settings options
+ * (Settings::UseLocks), pushed in via LockSource::SetSyncMode() /
+ * SetExitMode().  Each slot serializes the sync mode it was captured
+ * under, so flipping the setting never re-times an existing lock.  See
+ * docs/param-locks.md.
  */
 
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include "alchemy/control/lock_length.h"
+#include "alchemy/control/lock_types.h"
 #include "alchemy/control/param_lock_manager.h"
 #include "alchemy/control/pot_catch.h"
 #include "alchemy/control/preset_capacity.h"
 #include "alchemy/hw/i_button.h"
+#include "alchemy/led/panel.h"
 #include "alchemy/surface/lock_source.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/serializable.h"
@@ -72,11 +91,19 @@
 
 namespace alchemy {
 
-class LedPanel;
+class MusicalClock;
 
 /* Schema tag for ParamLock — bump if the saved layout changes shape.
- * 'PLK1': uint16 motion samples at a configurable rate, variable length. */
-inline constexpr uint32_t kParamLockSchemaTag = 0x504C4B31u; /* 'PLK1' */
+ * 'PLK2': 7-byte slot header (adds musical_ticks for Clocked loops) +
+ * uint16 motion samples at a configurable rate, variable length. */
+inline constexpr uint32_t kParamLockSchemaTag = 0x504C4B32u; /* 'PLK2' */
+
+/** One LED style: a color plus a LockAnim (see control/lock_types.h). */
+struct LockStyle
+{
+    LedPanel::Rgb color;
+    LockAnim      anim;
+};
 
 namespace detail {
 
@@ -108,6 +135,71 @@ class ParamLock : public Serializable, public LockSource
     /** Locks help override (default: stock_help::kLocks). */
     ParamLock& Help(const char* md) { help_ = md; return *this; }
     const char* ManualHelp() const { return help_; }
+
+    /* ── Behavior configuration (fluent, optional; defaults shown) ────
+     * See lock_types.h for the vocabulary and docs/param-locks.md for
+     * the full story.  Call from main(), before the loop starts.      */
+
+    /** Wire the musical clock Clocked mode snaps to and follows.  Without
+     *  it, Clocked recordings fall back to free per slot. */
+    ParamLock& UseClock(const MusicalClock& clk)
+    {
+        mgr_.SetClock(&clk);
+        return *this;
+    }
+
+    /** Note-value families Clocked recordings may snap to.  Integer bar
+     *  counts above one bar are always candidates.
+     *  Default: LockGrid::Straight | LockGrid::Triplet. */
+    ParamLock& SnapGrid(uint8_t mask) { mgr_.SetSnapGrid(mask); return *this; }
+
+    /** Nudge (0..1) that arms recording.  Default 0.005. */
+    ParamLock& ArmThreshold(float t) { mgr_.SetArmThreshold(t); return *this; }
+
+    /** Nudge (0..1) that clears an active lock.  Default 0.03. */
+    ParamLock& ClearThreshold(float t)
+    {
+        mgr_.SetClearThreshold(t);
+        return *this;
+    }
+
+    /** What happens to the knob's base value when recording ends.
+     *  LockExit::Return needs the paged form (a Pager to write into).
+     *  Default: LockExit::Latch. */
+    ParamLock& ExitMode(LockExit m)
+    {
+        assert(m != LockExit::Return || pager_ != nullptr);
+        exit_mode_ = m;
+        return *this;
+    }
+
+    /** Ring overlay while recording.  Default: solid red. */
+    ParamLock& RecordStyle(LedPanel::Rgb c, LockAnim a = LockAnim::Solid)
+    {
+        record_style_ = {c, a};
+        return *this;
+    }
+
+    /** Recording animation only — the color keeps its default (red). */
+    ParamLock& RecordStyle(LockAnim a)
+    {
+        record_style_.anim = a;
+        return *this;
+    }
+
+    /** Ring overlay while playing back.  Default: blinking red. */
+    ParamLock& PlayStyle(LedPanel::Rgb c, LockAnim a = LockAnim::Blink)
+    {
+        play_style_ = {c, a};
+        return *this;
+    }
+
+    /** Playback animation only — the color keeps its default (red). */
+    ParamLock& PlayStyle(LockAnim a)
+    {
+        play_style_.anim = a;
+        return *this;
+    }
 
     /* ── Configuration ───────────────────────────────────────────────
      * Compile-time constants — print at boot or static_assert against. */
@@ -286,9 +378,67 @@ class ParamLock : public Serializable, public LockSource
     /** True if any slot on the visible page is active. */
     bool AnyActive() const;
 
+    /** Loop phase 0..1 of pot @p pot on the visible page: the play head
+     *  while active, the write position while recording (buffer use).
+     *  0 when the slot is idle.  For custom ring renders. */
+    float PlayPhase(uint8_t pot) const;
+
+    /** PlayPhase for an arbitrary (page, pot) slot. */
+    float PlayPhaseAtPage(uint8_t page, uint8_t pot) const;
+
+    /** Reset one slot on the visible page (see ClearSlotAtPage). */
+    void ClearSlot(uint8_t pot);
+
+    /** Reset one (page, pot) slot to inactive.  For app plumbing —
+     *  buttons, host commands. */
+    void ClearSlotAtPage(uint8_t page, uint8_t pot);
+
+    /** Hold every play head in place; false resumes where they held.
+     *  Recording is unaffected. */
+    void Freeze(bool on) { mgr_.SetFrozen(on); }
+    bool Frozen() const  { return mgr_.Frozen(); }
+
+    /** One-shot: true exactly once per clean trigger release — one whose
+     *  hold armed or cleared nothing and wasn't poisoned by a gate.  The
+     *  tap-derivation hook (e.g. a mode cycle on the lock button); poll
+     *  it from OnFrame, after Update() has classified the release. */
+    bool TakeCleanRelease()
+    {
+        if (!release_pending_) return false;
+        release_pending_ = false;
+        const bool clean = !release_consumed_;
+        release_consumed_ = false;
+        return clean;
+    }
+
+    /* ── Sync/exit modes (LockSource; pushed by Settings::UseLocks) ─── */
+
+    void    SetSyncMode(uint8_t mode) override
+    {
+        mgr_.SetSyncMode(mode ? LockSync::Clocked : LockSync::Free);
+    }
+    uint8_t SyncMode() const override
+    {
+        return static_cast<uint8_t>(mgr_.SyncMode());
+    }
+    bool    HasClock() const override { return mgr_.HasClock(); }
+
+    void    SetExitMode(uint8_t mode) override
+    {
+        assert(!mode || pager_ != nullptr);
+        exit_mode_ = mode ? LockExit::Return : LockExit::Latch;
+    }
+    uint8_t ExitMode() const override
+    {
+        return static_cast<uint8_t>(exit_mode_);
+    }
+    bool    CanReturn() const override { return pager_ != nullptr; }
+
     /**
-     * Optional default overlay: marks rings whose lock is active/recording with
-     * a colored pip at 6 o'clock.  Recording = red, active = green.
+     * Optional default overlay: marks rings whose lock is recording or
+     * playing with a pip at 6 o'clock, styled by RecordStyle()/PlayStyle()
+     * (default: solid red recording, blinking red playback).  Sweep-style
+     * pips orbit the ring with the play head instead.
      */
     void Render(LedPanel& panel, uint32_t t_ms) const override;
 
@@ -366,6 +516,12 @@ class ParamLock : public Serializable, public LockSource
     bool             prev_pressed_    = false;
     bool             rising_pending_  = false;
     bool             falling_pending_ = false;
+    bool             release_poisoned_ = false;
+    bool             release_pending_  = false;
+    bool             release_consumed_ = false;
+    LockExit         exit_mode_       = LockExit::Latch;
+    LockStyle        record_style_    = {{0xFF, 0x00, 0x00}, LockAnim::Solid};
+    LockStyle        play_style_      = {{0xFF, 0x00, 0x00}, LockAnim::Blink};
     /* Slot bank latched at the trigger's press edge. */
     uint8_t          held_offset_     = 0;
     ParamLockSlot    slots_[kSlots] = {};

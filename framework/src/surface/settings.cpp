@@ -5,10 +5,13 @@
 
 #include "alchemy/surface/settings.h"
 
+#include <cassert>
 #include <cstring>
 
 #include "alchemy/hw/alchemy_lab.h"
 #include "alchemy/led/anims/catch_pip.h"
+#include "alchemy/surface/lock_source.h"
+#include "alchemy/surface/manual.h"
 #include "alchemy/surface/pager.h"
 #include "alchemy/surface/presets.h"
 
@@ -48,7 +51,210 @@ BrightnessHandle Settings::UseBrightness()
     s.pot.caught = true;
     s.color    = {0xFF, 0xC0, 0x40};
     if (hw_) ApplyBrightnessSlot(s);
-    return BrightnessHandle(&s);
+    return BrightnessHandle(this, &s, 0u, 0u);
+}
+
+/* ── Slot relocation (handles' At()) ─────────────────────────────────── */
+
+SettingsSlot* Settings::RelocateSlot(uint8_t from_page, uint8_t from_pot,
+                                     uint8_t to_page,   uint8_t to_pot)
+{
+    if (from_page >= kSettingsMaxPages || from_pot >= kNumPots
+     || to_page   >= kSettingsMaxPages || to_pot   >= kNumPots)
+        return nullptr;
+    if (from_page == to_page && from_pot == to_pot)
+        return &slots_[from_page][from_pot];
+
+    /* Relocating onto a configured slot would silently destroy it. */
+    assert(slots_[to_page][to_pot].kind == SettingsKind::None);
+
+    EnsurePage(to_page);
+    slots_[to_page][to_pot]     = slots_[from_page][from_pot];
+    slots_[from_page][from_pot] = SettingsSlot{};
+    return &slots_[to_page][to_pot];
+}
+
+BrightnessHandle& BrightnessHandle::At(uint8_t page, uint8_t pot)
+{
+    if (!owner_ || !s_) return *this;
+    SettingsSlot* moved = owner_->RelocateSlot(page_, pot_, page, pot);
+    if (!moved) return *this;
+    s_    = moved;
+    page_ = page;
+    pot_  = pot;
+    return *this;
+}
+
+/* UseLocks defaults: P5 sync / P6 exit, grey/amber zones, hostlink
+ * identity. */
+namespace {
+
+constexpr uint8_t kLockModeDefaultPot = 4u;
+constexpr uint8_t kLockExitDefaultPot = 5u;
+
+const LedPanel::Rgb kLockZoneColors[2] = {
+    {0x60, 0x60, 0x60},   /* zone 0 (default) — neutral grey   */
+    {0xFF, 0x50, 0x00},   /* zone 1           — settings amber */
+};
+
+const char* const kLockModeLabels[2] = {"Free", "Clocked"};
+const char* const kLockExitLabels[2] = {"Return", "Latch"};
+
+/* Exit zones render Return-first; LockExit is Latch = 0. */
+uint8_t ExitModeFromZone(uint8_t zone)
+{
+    return static_cast<uint8_t>(zone == 0u ? LockExit::Return
+                                           : LockExit::Latch);
+}
+
+uint8_t ZoneFromExitMode(LockExit m)
+{
+    return (m == LockExit::Return) ? 0u : 1u;
+}
+
+}  // namespace
+
+Settings::LocksHandle Settings::UseLocks(LockSource& locks)
+{
+    /* Options the module cannot honor would be lies: call
+     * locks.UseClock(...) first, and Return needs the paged form. */
+    assert(locks.HasClock());
+    assert(locks.CanReturn());
+
+    EnsurePage(0u);
+    SettingsSlot& s = slots_[0][kLockModeDefaultPot];
+    assert(s.kind == SettingsKind::None);   /* P5 already taken */
+    s              = SettingsSlot{};
+    s.kind         = SettingsKind::Selector;
+    s.num_zones    = 2u;
+    s.value_idx    = locks.SyncMode() ? 1u : 0u;
+    s.pot.stored   = (static_cast<float>(s.value_idx) + 0.5f) / 2.0f;
+    s.pot.caught   = true;
+    s.zone_colors  = kLockZoneColors;
+    s.labels       = kLockModeLabels;
+    s.num_labels   = 2u;
+    s.ident        = "lock_mode";
+    s.display_name = "Lock Mode";
+    s.help         = stock_help::kLockMode;
+    s.lock_src     = &locks;
+    locks.SetSyncMode(s.value_idx);
+
+    SettingsSlot& e = slots_[0][kLockExitDefaultPot];
+    assert(e.kind == SettingsKind::None);   /* P6 already taken */
+    e               = SettingsSlot{};
+    e.kind          = SettingsKind::Selector;
+    e.num_zones     = 2u;
+    e.value_idx     = ZoneFromExitMode(LockExit::Return);
+    e.pot.stored    = (static_cast<float>(e.value_idx) + 0.5f) / 2.0f;
+    e.pot.caught    = true;
+    e.zone_colors   = kLockZoneColors;
+    e.labels        = kLockExitLabels;
+    e.num_labels    = 2u;
+    e.ident         = "lock_exit";
+    e.display_name  = "Lock Exit";
+    e.help          = stock_help::kLockExit;
+    e.lock_exit_src = &locks;
+    locks.SetExitMode(ExitModeFromZone(e.value_idx));
+
+    return LocksHandle(this, 0u, kLockModeDefaultPot,
+                       0u, kLockExitDefaultPot);
+}
+
+/* ── LocksHandle ──────────────────────────────────────────────────── */
+
+SettingsSlot* Settings::LocksHandle::Slot() const
+{
+    if (!owner_ || page_ >= kSettingsMaxPages || pot_ >= kNumPots)
+        return nullptr;
+    SettingsSlot& s = owner_->slots_[page_][pot_];
+    return (s.lock_src != nullptr) ? &s : nullptr;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::At(uint8_t page, uint8_t pot)
+{
+    if (!Slot()) return *this;
+    if (owner_->RelocateSlot(page_, pot_, page, pot))
+    {
+        page_ = page;
+        pot_  = pot;
+    }
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::Default(LockSync m)
+{
+    SettingsSlot* s = Slot();
+    if (!s) return *this;
+    s->value_idx  = (m == LockSync::Clocked) ? 1u : 0u;
+    s->pot.stored = (static_cast<float>(s->value_idx) + 0.5f) / 2.0f;
+    s->lock_src->SetSyncMode(s->value_idx);
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::Colors(const LedPanel::Rgb* palette)
+{
+    if (SettingsSlot* s = Slot()) s->zone_colors = palette;
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::Ident(const char* id)
+{
+    if (SettingsSlot* s = Slot()) s->ident = id;
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::Name(const char* n)
+{
+    if (SettingsSlot* s = Slot()) s->display_name = n;
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::Help(const char* md)
+{
+    if (SettingsSlot* s = Slot()) s->help = md;
+    return *this;
+}
+
+LockSync Settings::LocksHandle::Value() const
+{
+    const SettingsSlot* s = Slot();
+    return (s && s->value_idx) ? LockSync::Clocked : LockSync::Free;
+}
+
+SettingsSlot* Settings::LocksHandle::ExitSlot() const
+{
+    if (!owner_ || exit_page_ >= kSettingsMaxPages || exit_pot_ >= kNumPots)
+        return nullptr;
+    SettingsSlot& s = owner_->slots_[exit_page_][exit_pot_];
+    return (s.lock_exit_src != nullptr) ? &s : nullptr;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::ExitAt(uint8_t page, uint8_t pot)
+{
+    if (!ExitSlot()) return *this;
+    if (owner_->RelocateSlot(exit_page_, exit_pot_, page, pot))
+    {
+        exit_page_ = page;
+        exit_pot_  = pot;
+    }
+    return *this;
+}
+
+Settings::LocksHandle& Settings::LocksHandle::DefaultExit(LockExit m)
+{
+    SettingsSlot* s = ExitSlot();
+    if (!s) return *this;
+    s->value_idx  = ZoneFromExitMode(m);
+    s->pot.stored = (static_cast<float>(s->value_idx) + 0.5f) / 2.0f;
+    s->lock_exit_src->SetExitMode(static_cast<uint8_t>(m));
+    return *this;
+}
+
+LockExit Settings::LocksHandle::ExitValue() const
+{
+    const SettingsSlot* s = ExitSlot();
+    return s ? static_cast<LockExit>(ExitModeFromZone(s->value_idx))
+             : LockExit::Latch;
 }
 
 PresetGestureUi& Settings::UsePresets(Presets& store)
@@ -91,7 +297,7 @@ BrightnessHandle Settings::PotBuilder::Brightness()
     s.pot.stored = (s.value - s.range_lo) / (s.range_hi - s.range_lo);
     s.pot.caught = true;
     if (s_.hw_) s_.ApplyBrightnessSlot(s);
-    return BrightnessHandle(&s);
+    return BrightnessHandle(&s_, &s, page_, pot_);
 }
 
 KnobHandle Settings::PotBuilder::Knob()
@@ -325,6 +531,9 @@ void Settings::Update(const float* phys, uint32_t t_ms)
                 int idx = static_cast<int>(v * static_cast<float>(s.num_zones));
                 if (idx >= static_cast<int>(s.num_zones)) idx = s.num_zones - 1;
                 s.value_idx = static_cast<uint8_t>(idx);
+                if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
+                if (s.lock_exit_src)
+                    s.lock_exit_src->SetExitMode(ExitModeFromZone(s.value_idx));
                 break;
             }
 
@@ -580,6 +789,10 @@ bool Settings::Deserialize(const uint8_t* in)
                     if (s.num_zones > 0u)
                         s.pot.stored = (static_cast<float>(idx) + 0.5f)
                                      / static_cast<float>(s.num_zones);
+                    if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
+                    if (s.lock_exit_src)
+                        s.lock_exit_src->SetExitMode(
+                            ExitModeFromZone(s.value_idx));
                     break;
                 }
                 default:

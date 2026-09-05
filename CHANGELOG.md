@@ -1,10 +1,29 @@
-# Alchemy SDK — unreleased
+# Unreleased
+
+## Parameter locks v2
+
+- Clocked mode: `locks.UseClock(clock_)` plus a persisted Free/Clocked
+  selector via `settings.UseLocks(locks)` (P5). New recordings snap
+  their loop boundary to the nearest musical division (straight+triplet
+  default, `SnapGrid()` adds dotted) and
+  restart in time through tempo changes. Slot headers
+  `'PLK1'` → `'PLK2'` (5 → 7 B); older saved locks schema-gate to empty.
+- Gesture: arm at 0.5% (was 3%), clear stays 3%, `record_base` is the
+  pre-nudge origin; `ArmThreshold()` / `ClearThreshold()`.
+- `ExitMode(LockExit::Return)`: knob snaps back to the origin on
+  release and pot-catch re-arms; `Latch` (surface default) is today's
+  behavior. `UseLocks` also installs a persisted Return/Latch selector
+  (P6, Return default), completing the default settings stack: P1
+  brightness, P2 free, P3–P4 presets, P5–P6 locks.
+- `RecordStyle()` / `PlayStyle()` (Solid/Blink/Breathe/LoopPulse/Sweep,
+  red defaults), `ClearSlot()`, `Freeze()`, `PlayPhase()`, and
+  `BrightnessHandle::At()`.
+
+## Pager navigation bindings
 
 Shift layers are pages: page navigation became declarative button
 bindings on `Pager`, so a hold-layer gets pot-catch, presets, locks, CV,
 rings, and the descriptor for free (#16).
-
-## Pager navigation bindings
 
 - `Pager(num_pages, num_pots)` + fluent `.Cycle(btn, pages...)`,
   `.Shift(btn, page)`, `.Latch(btn, a, b)`, `.From(pages...)`.  The
