@@ -398,6 +398,19 @@ class ParamLock : public Serializable, public LockSource
     void Freeze(bool on) { mgr_.SetFrozen(on); }
     bool Frozen() const  { return mgr_.Frozen(); }
 
+    /** One-shot: true exactly once per clean trigger release — one whose
+     *  hold armed or cleared nothing and wasn't poisoned by a gate.  The
+     *  tap-derivation hook (e.g. a mode cycle on the lock button); poll
+     *  it from OnFrame, after Update() has classified the release. */
+    bool TakeCleanRelease()
+    {
+        if (!release_pending_) return false;
+        release_pending_ = false;
+        const bool clean = !release_consumed_;
+        release_consumed_ = false;
+        return clean;
+    }
+
     /* ── Sync/exit modes (LockSource; pushed by Settings::UseLocks) ─── */
 
     void    SetSyncMode(uint8_t mode) override
@@ -503,6 +516,9 @@ class ParamLock : public Serializable, public LockSource
     bool             prev_pressed_    = false;
     bool             rising_pending_  = false;
     bool             falling_pending_ = false;
+    bool             release_poisoned_ = false;
+    bool             release_pending_  = false;
+    bool             release_consumed_ = false;
     LockExit         exit_mode_       = LockExit::Latch;
     LockStyle        record_style_    = {{0xFF, 0x00, 0x00}, LockAnim::Solid};
     LockStyle        play_style_      = {{0xFF, 0x00, 0x00}, LockAnim::Blink};

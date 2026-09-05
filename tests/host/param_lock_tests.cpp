@@ -1320,6 +1320,115 @@ void TestRestoredClockedLocksShareAlignment()
 
 /* ── 11. Freeze / ClearSlot / PlayPhase ────────────────────────────── */
 
+/* ── Paged + clocked + steered tempo (the bassvox wiring) ────────────
+ * The clock ticks at poll cadence (16 sub-ticks per frame), the tempo
+ * is re-pushed every frame with estimator jitter, and the surface is
+ * the PAGED form.  A ~1-bar take must still snap to the bar. */
+
+void TestClockedSteeredPagedIntegration()
+{
+    FakeButton trigger;
+    FakeButton nav;
+    Pager      pager(nav, 3, 4);
+    using BvLocks = ParamLock<12, LockLength<4, 50>>;
+    BvLocks locks(trigger, pager);
+    locks.Init();
+
+    MusicalClock clk(kTestPpqn, 4u);
+    clk.SetBpm(120.0f);
+    clk.Start();
+    uint32_t t_us = 1000u;
+    clk.Tick(t_us);
+    locks.UseClock(clk);
+    static_cast<LockSource&>(locks).SetSyncMode(1u);
+
+    int  jit   = 0;
+    auto frame = [&](const float* phys) {
+        for (int i = 0; i < 16; i++) { t_us += 1000u; clk.Tick(t_us); }
+        clk.SetBpm(120.0f + ((jit++ & 1) ? 0.25f : -0.25f));
+        locks.SetFrameMs(16u);
+        locks.PollButtons(0u, false);
+        pager.PollButtons(0u, false);
+        locks.Advance();
+        locks.Update(phys, 0u);
+        pager.Update(phys, 0u);
+    };
+
+    float phys[4];
+    for (uint8_t i = 0; i < 4; i++) phys[i] = kRest;
+
+    /* ~1 bar of motion at 120 BPM: 125 × 16 ms = 2.0 s. */
+    trigger.pressed = true;
+    frame(phys);                                     /* baseline */
+    for (int i = 1; i <= 125; i++)
+    {
+        phys[2] = kRest + 0.003f * static_cast<float>(i);
+        frame(phys);
+    }
+    trigger.pressed = false;
+    frame(phys);
+    PCHECK(locks.IsActive(2));
+
+    /* Restart period: crossing-to-crossing on a mid-ramp level must be
+     * the snapped bar — 125 frames at the (jittering ~120) tempo. */
+    const float level = 0.003f * 60.0f;              /* mid-take delta */
+    float    prev  = locks.Delta(2);
+    bool     armed = false;
+    uint32_t n     = 0u, period = 0u;
+    for (uint32_t i = 0; i < 4000u && period == 0u; i++)
+    {
+        frame(phys);
+        n++;
+        const float now = locks.Delta(2);
+        const bool crossed = (prev < level && now >= level);
+        prev = now;
+        if (!crossed) continue;
+        if (!armed) { armed = true; n = 0u; }
+        else        period = n;
+    }
+    PCHECK(period >= 123u && period <= 127u);
+}
+
+/* ── TakeCleanRelease: the tap-derivation hook ──────────────────────── */
+
+void TestTakeCleanRelease()
+{
+    FakeButton button;
+    ExactLocks locks(button);
+    locks.Init();
+
+    float phys[4];
+    for (uint8_t i = 0; i < 4; i++) phys[i] = kRest;
+
+    /* A plain tap is clean — reported exactly once. */
+    button.pressed = true;
+    Frame(locks, phys, kExactFrameMs);
+    button.pressed = false;
+    Frame(locks, phys, kExactFrameMs);
+    PCHECK(locks.TakeCleanRelease());
+    PCHECK(!locks.TakeCleanRelease());
+
+    /* A hold that recorded a lock is not. */
+    RecordGesture<ExactLocks, 4>(locks, button, 0, {0.6f, 0.7f, 0.8f},
+                                 kExactFrameMs);
+    PCHECK(locks.IsActive(0));
+    PCHECK(!locks.TakeCleanRelease());
+
+    /* A release landing under the gate is poisoned — but still reaches
+     * the manager, so the hold cannot dangle. */
+    button.pressed = true;
+    Frame(locks, phys, kExactFrameMs);
+    button.pressed = false;
+    locks.PollButtons(0u, /*gated=*/true);
+    Frame(locks, phys, kExactFrameMs);
+    PCHECK(!locks.TakeCleanRelease());
+    button.pressed = true;                       /* manager saw the up: */
+    Frame(locks, phys, kExactFrameMs);           /* a new hold works    */
+    button.pressed = false;
+    Frame(locks, phys, kExactFrameMs);
+    PCHECK(locks.TakeCleanRelease());
+}
+
 void TestFreezeHoldsPlayheads()
 {
     FakeButton button;
@@ -1828,6 +1937,8 @@ int RunParamLockTests(int& checks, int& failures)
     TestRestoredClockedLocksShareAlignment();
 
     TestFreezeHoldsPlayheads();
+    TestClockedSteeredPagedIntegration();
+    TestTakeCleanRelease();
     TestRecordingFinishedWhileFrozen();
     TestClearSlotIsIsolated();
     TestPlayPhaseReportsHeadAndWriteFill();

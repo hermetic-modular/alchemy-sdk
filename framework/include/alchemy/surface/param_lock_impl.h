@@ -45,7 +45,14 @@ void ParamLock<kSlots, Len>::PollButtons(uint32_t /*t_ms*/, bool gated)
     const bool falling = !pressed && prev_pressed_;
     prev_pressed_ = pressed;
     if (rising && !gated) rising_pending_ = true;
-    if (falling) falling_pending_ = true;
+    if (falling)
+    {
+        /* A release is never dropped — the manager must see OnButtonUp
+         * so a gated release can't dangle the hold — but one landing
+         * under the gate is poisoned: no tap derives from it. */
+        falling_pending_ = true;
+        if (gated) release_poisoned_ = true;
+    }
 }
 
 template<uint8_t kSlots, class Len>
@@ -68,10 +75,20 @@ void ParamLock<kSlots, Len>::Update(const float* phys, uint32_t /*t_ms*/)
     if (falling_pending_)
     {
         falling_pending_ = false;
+        const bool was_held = mgr_.IsButtonHeld();
         const bool consumed = mgr_.OnButtonUp();
         if (pager_) pager_->ReleasePage();
         if (consumed && pager_ && pager_->ConsumesRelease(trigger_))
             pager_->ConsumeButton();
+
+        /* Classify for TakeCleanRelease: a tap candidate is a release
+         * the manager saw as a hold, unpoisoned, with no gesture. */
+        if (was_held && !release_poisoned_)
+        {
+            release_pending_  = true;
+            release_consumed_ = consumed;
+        }
+        release_poisoned_ = false;
 
         /* Return exit: every slot THIS hold armed snaps its base back to
          * the gesture origin and re-arms pot catch.  Cleared slots ended
