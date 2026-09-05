@@ -216,7 +216,7 @@ void Pager::PollButtons(uint32_t /*t_ms*/, bool gated)
 
 /* ── Frame: apply pending navigation, then catch ───────────────────────── */
 
-void Pager::Update(const float* phys, uint32_t /*t_ms*/)
+void Pager::Update(const float* phys, uint32_t t_ms)
 {
     /* Lazy re-arm after a Deserialize: we now have a phys[] to lock
      * against.  A held layer stays engaged and reads as clean again. */
@@ -306,7 +306,7 @@ void Pager::Update(const float* phys, uint32_t /*t_ms*/)
      * nudge cannot both edit a layer and pass for a clean tap. */
     PotState* row = &states_[page_][0];
     for (uint8_t p = 0; p < num_pots_; p++)
-        UpdateCatch(row[p], phys[p]);
+        UpdateCatch(row[p], phys[p], t_ms);
 
     /* Used-tracking: a pot that took hold counts; one caught at engage
      * counts once it moves. */

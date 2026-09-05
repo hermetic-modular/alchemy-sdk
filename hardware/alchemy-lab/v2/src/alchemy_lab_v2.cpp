@@ -18,6 +18,9 @@ namespace alchemy {
 
 AlchemyLabV2* AlchemyLabV2::s_instance_ = nullptr;
 
+/* 20 Hz pot one-pole at the 1 kHz ProcessAllControls() cadence. */
+static constexpr float kPotLpCoeff = 0.1181f; /* 1 - exp(-2π·20/1000) */
+
 void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
                         uint32_t                             block_size)
 {
@@ -50,6 +53,16 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
     const float sr = seed.AudioCallbackRate();
     for (uint8_t i = 0; i < kNumPots; i++)
         pots[i].Init(seed.adc.GetPtr(i), sr, kPotPolarityFlipped, false, 0.0f);
+
+    /* Init's slew arg is calibrated to the audio-callback rate, so set
+     * the pot coeff directly; prime through the slew-0 pass-through so
+     * val_ starts on-position instead of converging from 0. */
+    daisy::System::Delay(2); /* first ADC scan */
+    for (uint8_t i = 0; i < kNumPots; i++)
+    {
+        pots[i].Process();
+        pots[i].SetCoeff(kPotLpCoeff);
+    }
 
     /* 3) On-MCU buttons (B1, B2) ──────────────────────────────────────── */
     for (uint8_t i = 0; i < kNumOnMcuButtons; i++)
