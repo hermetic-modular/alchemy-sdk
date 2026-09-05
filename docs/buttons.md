@@ -90,10 +90,15 @@ changed.
   reads; bank callbacks run at the 1 ms poll.
 - **Gestures resolve against the press-time page.**  A page change mid
   hold cannot retarget the gesture.
-- **Pager shadowing is deliberate.**  A gesture fired on the pager's
-  button consumes that release (`KnobStorage::ConsumeButton`), so a
-  button declared on B1 shadows page-advance on pages that declare it —
-  and only there.
+- **Pager shadowing is deliberate.**  A gesture fired on a button that
+  carries a release-driven navigation binding — the cycle button, a
+  latch pair's button (`KnobStorage::ConsumesRelease`) — consumes that
+  release (`KnobStorage::ConsumeButton`), so a button declared on B1
+  shadows page-advance on pages that declare it — and only there.
+- **Shift layers compose with taps.**  A `Pager::Shift` hold that
+  edited a parameter claims its release (`KnobStorage::HoldClaimed`)
+  and the trailing tap stays quiet; a clean hold leaves the tap free.
+  See docs/pages-and-layers.md.
 - **Don't stack holds on the ParamLock button.**  Lock recording is
   hold+knob; the two hold gestures cannot be arbitrated.
 - **Settings gates gestures, not data.**  While Settings is active

@@ -25,6 +25,11 @@
  * from Update() (gestures) so playback survives modes — like the Settings
  * menu — that suspend gesture handling.
  *
+ * The RECORD gesture banks at the trigger's press edge — you lock what
+ * you were looking at, even if the page changes mid-hold — and the
+ * paged form holds the pager's view latch (Pager::RetainPage) for the
+ * duration, so a layer the recording started on stays showing.
+ *
  * Composition at the user's read site:
  *
  *   float knob(uint8_t p, void*) {
@@ -361,6 +366,8 @@ class ParamLock : public Serializable, public LockSource
     bool             prev_pressed_    = false;
     bool             rising_pending_  = false;
     bool             falling_pending_ = false;
+    /* Slot bank latched at the trigger's press edge. */
+    uint8_t          held_offset_     = 0;
     ParamLockSlot    slots_[kSlots] = {};
     ParamLockManager mgr_;
 

@@ -42,6 +42,7 @@
 
 #include "button_tests.h"
 #include "fs_tests.h"
+#include "pager_nav_tests.h"
 #include "param_lock_tests.h"
 
 using namespace alchemy;
@@ -2090,6 +2091,7 @@ int main(int argc, char** argv)
 
     RunParamLockTests(g_checks, g_failures);
     RunButtonTests(g_checks, g_failures);
+    RunPagerNavTests(g_checks, g_failures);
     RunFsTests(g_checks, g_failures);
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);

@@ -86,11 +86,34 @@ class KnobStorage
      * or nullptr when it has none.  Surfaces that claim a gesture on the
      * same button (ParamLock, ButtonBank) compare against this and call
      * ConsumeButton() so the same release doesn't also advance the page.
+     * With navigation bindings (see Pager), prefer ConsumesRelease() —
+     * it also covers latch buttons; this remains the cycle button.
      */
     virtual const IButton* PageButton() const { return nullptr; }
 
     /** Suppress the next page-advance release (no-op by default). */
     virtual void ConsumeButton() {}
+
+    /** True when a release-driven page gesture (cycle, latch) is bound
+     *  to @p b — the general form of the PageButton() identity check. */
+    virtual bool ConsumesRelease(const IButton* b) const
+    {
+        return b != nullptr && b == PageButton();
+    }
+
+    /** True while a hold-layer gesture on @p b has edited a parameter:
+     *  the release is claimed and a same-button tap stays quiet. */
+    virtual bool HoldClaimed(const IButton* /*b*/) const { return false; }
+
+    /** Indicator color for button @p b's LED pair, painted by
+     *  ControlLoop (black = unpainted; ButtonBank colors win).
+     *  Default: the page tint on the page-advance button. */
+    virtual LedPanel::Rgb IndicatorColor(const IButton* b) const
+    {
+        return (b != nullptr && b == PageButton())
+                   ? PageColor(ActivePage())
+                   : LedPanel::Rgb{0, 0, 0};
+    }
 };
 
 } // namespace alchemy

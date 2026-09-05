@@ -60,17 +60,23 @@ void ParamLock<kSlots, Len>::Update(const float* phys, uint32_t /*t_ms*/)
     if (rising_pending_)
     {
         rising_pending_ = false;
+        /* Bank at the press edge; the view latch keeps a layer the
+         * recording started on showing until release. */
+        held_offset_ = Offset();
+        if (pager_) pager_->RetainPage();
         mgr_.OnButtonDown(phys);
     }
     if (falling_pending_)
     {
         falling_pending_ = false;
         const bool consumed = mgr_.OnButtonUp();
-        if (consumed && pager_) pager_->ConsumeButton();
+        if (pager_) pager_->ReleasePage();
+        if (consumed && pager_ && pager_->ConsumesRelease(trigger_))
+            pager_->ConsumeButton();
     }
 
     if (mgr_.IsButtonHeld())
-        mgr_.ProcessGestures(Offset(), phys);
+        mgr_.ProcessGestures(held_offset_, phys);
 }
 
 template<uint8_t kSlots, class Len>

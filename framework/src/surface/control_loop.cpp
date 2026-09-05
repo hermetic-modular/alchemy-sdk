@@ -193,11 +193,15 @@ void ControlLoop::Render(uint32_t t_ms)
             }
         }
 
-        /* Page indicator (only meaningful when storage advertises one). */
+        /* Navigation indicators: every binding paints its own button. */
         if (storage_)
         {
-            const LedPanel::Rgb c = storage_->PageColor(active);
-            if (c.r || c.g || c.b) hw_->leds.SetButtonPair(0, c);
+            for (uint8_t i = 0; i < kNumButtons; i++)
+            {
+                const LedPanel::Rgb c =
+                    storage_->IndicatorColor(&hw_->buttons[i]);
+                if (c.r || c.g || c.b) hw_->leds.SetButtonPair(i, c);
+            }
         }
     }
 
