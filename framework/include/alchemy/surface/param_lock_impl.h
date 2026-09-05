@@ -44,8 +44,7 @@ void ParamLock<kSlots, Len>::PollButtons(uint32_t /*t_ms*/, bool gated)
     const bool rising  = pressed && !prev_pressed_;
     const bool falling = !pressed && prev_pressed_;
     prev_pressed_ = pressed;
-    if (gated) return;
-    if (rising)  rising_pending_  = true;
+    if (rising && !gated) rising_pending_ = true;
     if (falling) falling_pending_ = true;
 }
 
