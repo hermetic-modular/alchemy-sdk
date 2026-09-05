@@ -19,6 +19,12 @@
  *
  *   hw.j9.EnableCvOutput();      // claim codec out channel
  *   hw.j9.SetVolts(precise);     // 24-bit DC, audio-block latency
+ *
+ * Driving several MCP jacks in one control tick: stage each, latch once.
+ *
+ *   hw.j3.StageVolts(a);
+ *   hw.j4.StageVolts(b);
+ *   hw.FlushCvOutputs();         // one WriteAll + one LDAC pulse
  */
 
 #pragma once
@@ -60,6 +66,12 @@ class CvJack
      *  unavailable. */
     bool SetVolts(float volts);
 
+    /** Stage `volts` without latching. J3..J6 write the shared MCP shadow,
+     *  applied on the next AlchemyLabV2::FlushCvOutputs(); J7..J10 have
+     *  nothing to batch, so this is exactly SetVolts. Returns false on
+     *  backend unavailable. */
+    bool StageVolts(float volts);
+
     /* ── Direction ───────────────────────────────────────────────────── */
 
     /** Put this jack into CV-output mode.
@@ -80,10 +92,11 @@ class CvJack
     enum class Backend : uint8_t { Mcp, Stm, CodecOut };
 
     /** MCP4728 jack (J3..J6). `shadow_slot` points into the shared
-     *  4-channel shadow array; `mcp_shadow_dirty` is unused for now (kept
-     *  for future batched-flush). `vdda` is the board VDDA out of the cal
-     *  record — the reference the record's zero codes and DAC fits were
-     *  measured against (kV2VddaDesign when uncalibrated). */
+     *  4-channel shadow array and `dirty_flag` at the board's staged-write
+     *  flag — both owned by AlchemyLabV2, which outlives every jack.
+     *  `vdda` is the board VDDA out of the cal record — the reference the
+     *  record's zero codes and DAC fits were measured against
+     *  (kV2VddaDesign when uncalibrated). */
     void InitMcp(uint16_t*           adc_ptr,
                  float               sample_rate,
                  const V2JackCal*    cal,
@@ -92,6 +105,7 @@ class CvJack
                  uint8_t             mcp_channel,
                  uint16_t*           shadow_slot,
                  uint16_t*           shadow_array,
+                 bool*               dirty_flag,
                  Pca9557*            expander,
                  uint8_t             select_io,
                  uint8_t             ldac_io);
@@ -114,6 +128,8 @@ class CvJack
      *  AnalogControl for jacks that have one. Cheap no-op for codec out. */
     void Process();
 
+    uint16_t VoltsToCode(float volts) const;
+
     /* ── Common state ─────────────────────────────────────────────────── */
 
     Backend          backend_   = Backend::Mcp;
@@ -130,6 +146,7 @@ class CvJack
     uint8_t   mcp_channel_      = 0;
     uint16_t* mcp_shadow_slot_  = nullptr;   /* points into shadow_array */
     uint16_t* mcp_shadow_array_ = nullptr;   /* whole 4-channel shadow   */
+    bool*     mcp_dirty_        = nullptr;   /* board's staged-write flag */
     uint8_t   ldac_io_          = 0;
 
     /* ── STM DAC-only ─────────────────────────────────────────────────── */

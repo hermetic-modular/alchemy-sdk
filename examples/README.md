@@ -7,7 +7,7 @@
 | [`clock_sync/`](clock_sync/) | External 24 PPQN clock follower amplitude-modulating an audio passthrough. | Minimal `MusicalClock` + `ClockFollower` wiring for phase-aware tempo sync. |
 | [`ring_demo/`](ring_demo/) | A stereo tremolo whose rings render the LFO itself: a comet pip on the rate ring, a carved notch + shimmer on the depth ring. | Ring composition — `RingFrame`, `Pip`, `Field`, and the publish-DSP-state pattern for signal-driven animation. |
 | [`v2_cal_test/`](v2_cal_test/) *(V2 only)* | Scope-driven calibration acceptance test: B1 steps all jacks −5..+5 V, B2 toggles calibration on/off, the rings show the target voltage. | The calibrated CV-out API end-to-end, plus the LED panel as a bench instrument. |
-| [`v2_cv_demo/`](v2_cv_demo/) *(V2 only)* | All six jacks auto-cycling ±4 V with cal status on the Seed LED. | The minimal calibrated CV-out wiring — `RouteCvOut` + `SetCvOutVolts` in ~60 lines. |
+| [`v2_cv_demo/`](v2_cv_demo/) *(V2 only)* | All six jacks auto-cycling ±4 V with cal status on the Seed LED. | The minimal calibrated CV-out wiring — `EnableCvOutput` + `SetVolts` in ~60 lines. |
 | [`hostlink/`](hostlink/) *(V2 only)* | A minimal preset-bearing module manageable from the browser over USB CDC. | The HostLink recipe — one `hostlink::Host` declaration + `loop.Use(host)`; the web editor's layout is derived from the declared surfaces, including a custom self-describing component. |
 
 ---

@@ -24,6 +24,7 @@ void CvJack::InitMcp(uint16_t*        adc_ptr,
                      uint8_t          mcp_channel,
                      uint16_t*        shadow_slot,
                      uint16_t*        shadow_array,
+                     bool*            dirty_flag,
                      Pca9557*         expander,
                      uint8_t          select_io,
                      uint8_t          ldac_io)
@@ -39,6 +40,7 @@ void CvJack::InitMcp(uint16_t*        adc_ptr,
     mcp_channel_      = mcp_channel;
     mcp_shadow_slot_  = shadow_slot;
     mcp_shadow_array_ = shadow_array;
+    mcp_dirty_        = dirty_flag;
     ldac_io_          = ldac_io;
     if (cal_) in_.SetCalibration(cal_->adc_zero_code, vdda);
 }
@@ -106,6 +108,17 @@ float CvJack::Value() const
 
 /* ── Write ──────────────────────────────────────────────────────────── */
 
+uint16_t CvJack::VoltsToCode(float volts) const
+{
+    /* Invert the per-jack linear fit, clamped to 0..4095. Past the linear
+       region the output compresses near the rails, but full scale still
+       lands closest to ±5 V. */
+    float code_f = (volts - cal_->dac_offset_v) / cal_->dac_gain_v_per_code;
+    if (code_f < 0.0f)      code_f = 0.0f;
+    if (code_f > 4095.0f)   code_f = 4095.0f;
+    return static_cast<uint16_t>(code_f + 0.5f);
+}
+
 bool CvJack::SetVolts(float volts)
 {
     target_v_ = volts;
@@ -118,16 +131,7 @@ bool CvJack::SetVolts(float volts)
 
     if (!cal_) return false;
 
-    /* Invert the per-jack linear fit, clamp to the 12-bit hardware range.
-       Past the linear region (cal_->dac_{min,max}_linear_code) the output
-       compresses near the DAC's supply rails, so the jack stops tracking
-       the fit — but pushing to 0/4095 still gets us as close to ±5 V as
-       the analog stage physically allows, which matters more than
-       perfect linearity in the last ~100 mV. */
-    float code_f = (volts - cal_->dac_offset_v) / cal_->dac_gain_v_per_code;
-    if (code_f < 0.0f)      code_f = 0.0f;
-    if (code_f > 4095.0f)   code_f = 4095.0f;
-    const uint16_t code = static_cast<uint16_t>(code_f + 0.5f);
+    const uint16_t code = VoltsToCode(volts);
 
     if (backend_ == Backend::Mcp)
     {
@@ -138,12 +142,35 @@ bool CvJack::SetVolts(float volts)
         if (!mcp_->WriteAll(mcp_shadow_array_[0], mcp_shadow_array_[1],
                             mcp_shadow_array_[2], mcp_shadow_array_[3]))
             return false;
-        return mcp_->PulseLdac(*expander_, ldac_io_);
+        
+        if (!mcp_->PulseLdac(*expander_, ldac_io_))
+            return false;
+
+        /* WriteAll sends all for channels */
+        if (mcp_dirty_) *mcp_dirty_ = false;
+        return true;
     }
 
     /* STM DAC */
     if (!stm_) return false;
     return stm_->WriteValue(stm_ch_, code) == daisy::DacHandle::Result::OK;
+}
+
+bool CvJack::StageVolts(float volts)
+{
+    /* Only the MCP backend has a latch worth deferring; for the others the
+       write is already cheap, so stage == set and the flush is a no-op. */
+    if (backend_ != Backend::Mcp)
+        return SetVolts(volts);
+
+    target_v_ = volts;
+
+    if (!cal_ || !mcp_ || !mcp_->Ready() || !mcp_shadow_slot_ || !mcp_dirty_)
+        return false;
+
+    *mcp_shadow_slot_ = VoltsToCode(volts);
+    *mcp_dirty_       = true;
+    return true;
 }
 
 /* ── Direction ──────────────────────────────────────────────────────── */

@@ -9,7 +9,7 @@
  *                            routed through the PCA9557 expander)
  *   - strip, leds            WS2812 + LedPanel
  *   - sdmmc, fatfs           SDMMC1 (1-bit, MEDIUM_SLOW) + FatFS volume "0:"
- *   - Init(), ProcessAllControls(), StartAudio()
+ *   - Init(), ProcessAllControls(), StartAudio(), FlushCvOutputs()
  *   - Layout(), Arc(), SampleRate(), BlockSize()
  *   - I2cReady(), ExpanderReady(), Mcp4728Ready(), StmDacReady()
  *
@@ -158,6 +158,8 @@ class AlchemyLabV2
      *  codec-CV shim around it transparently. */
     void StartAudio(daisy::AudioHandle::AudioCallback cb);
 
+    bool FlushCvOutputs();
+
     /* ── Accessors ─────────────────────────────────────────────────────── */
 
     const HardwareLayout& Layout() const { return kAlchemyLabV2Layout; }
@@ -195,6 +197,8 @@ class AlchemyLabV2
     /** MCP4728 writes are all-four-channels; shadow the last value per
      *  channel so per-jack SetVolts doesn't disturb the others. */
     uint16_t mcp_shadow_[kMcp4728NumChannels] = { 2048u, 2048u, 2048u, 2048u };
+
+    bool mcp_dirty_ = false;
 
     /* ── Audio shim plumbing ─────────────────────────────────────────── */
 

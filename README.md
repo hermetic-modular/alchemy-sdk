@@ -248,6 +248,20 @@ The set volts functions apply calibration transparently - `hw.j3.SetVolts(volts)
 [`v2_calibration.h`](hardware/alchemy-lab/v2/include/alchemy/hw/v2_calibration.h) for details and
 [`examples/v2_cal_test`](examples/v2_cal_test/v2_cal_test.cpp) for a toggle calibration test app.
 
+`SetVolts()` writes and latches on every call. On J3..J6 that is a full I2C
+round each time. Instead, stage them all and latch once:
+
+```cpp
+hw.j3.StageVolts(a);
+hw.j4.StageVolts(b);
+hw.FlushCvOutputs();   // one WriteAll + one LDAC pulse, ~430 us
+```
+
+`FlushCvOutputs()` returns immediately when nothing is staged, so a control
+loop can end every tick with it. `StageVolts()` on J7..J10 is just
+`SetVolts()` — those backends have no latch to defer — so you can stage
+uniformly across jacks without branching on which one you hold.
+
 ## Expansion Header
 
 There is an expansion header on the back of the unit. In the future,
