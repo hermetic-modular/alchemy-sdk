@@ -36,7 +36,7 @@ void ClockFollower::Enable(uint32_t ext_ppqn)
     period_est_us_     = 0.0;
     integrator_        = 0.0;
     loss_announced_    = false;
-    pulse_pending_     = false;
+    ring_tail_         = ring_head_; /* discard pulses from before Enable */
 
     /* Stop the NCO and zero its rate so it does not free-run at the old
      * internal tempo while waiting for first lock (azoth
@@ -54,7 +54,6 @@ void ClockFollower::Disable()
     enabled_        = false;
     locked_         = false;
     loss_announced_ = false;
-    pulse_pending_  = false;
     if (nco_ != nullptr)
         nco_->SetSteered(false);
 }
@@ -119,48 +118,32 @@ void ClockFollower::OnReset()
 void ClockFollower::OnPulse(uint32_t stamp_us)
 {
     if (!enabled_) return;
-    /* Single-pulse mailbox: stamp first, then pending flag.  Reader
-     * (Update) checks pending → clears it → reads stamp.  A concurrent
-     * second pulse during Update overwrites stamp; the spec accepts
-     * newest-wins (§4.1).  Safe from EXTI ISR on Cortex-M7 (word stores
-     * are atomic). */
-    pulse_stamp_us_ = stamp_us;
-    pulse_pending_  = true;
+    /* SPSC: this side owns head, `Update` owns tail; the volatile head
+     * store publishes the slot (single-core, in-order vs ISR).  Full ⇒
+     * drop — a ring-length stall exceeds the loss threshold anyway. */
+    const uint32_t head = ring_head_;
+    if (head - ring_tail_ >= kPulseRingSize) return;
+    pulse_ring_[head % kPulseRingSize] = stamp_us;
+    ring_head_ = head + 1u;
 }
 
-/* ── Per-poll work ─────────────────────────────────────────────────────── */
-
-void ClockFollower::Update(uint32_t now_us)
+/* Per-pulse intake: seeding, validity window, period EMA, lock
+ * acquisition.  True ⇒ the pulse extended the valid stream. */
+bool ClockFollower::ConsumePulse(uint32_t stamp_us)
 {
-    if (!enabled_ || nco_ == nullptr) return;
-
-    /* ── Loss detection (runs every poll, independent of pulse arrival) */
-    if (have_last_stamp_ && period_est_us_ > 0.0 && !loss_announced_)
-    {
-        const uint32_t dt_since = now_us - last_pulse_stamp_;
-        const double   thresh   = period_est_us_ * static_cast<double>(kClockLossFactor);
-        if (static_cast<double>(dt_since) > thresh)
-            HandleLoss(now_us);
-    }
-
-    /* ── Consume a pending pulse, if any */
-    if (!pulse_pending_) return;
-    pulse_pending_         = false;
-    const uint32_t stamp   = pulse_stamp_us_;
-
     if (!have_last_stamp_)
     {
-        last_pulse_stamp_  = stamp;
+        last_pulse_stamp_  = stamp_us;
         have_last_stamp_   = true;
         valid_pulse_count_ = 1u;
         loss_announced_    = false;
-        return;
+        return false;
     }
 
-    const uint32_t dt = stamp - last_pulse_stamp_;
+    const uint32_t dt = stamp_us - last_pulse_stamp_;
 
     if (dt < min_period_us_)
-        return; /* glitch — ignore */
+        return false; /* glitch — ignore */
 
     if (dt > max_period_us_)
     {
@@ -170,13 +153,12 @@ void ClockFollower::Update(uint32_t now_us)
         locked_            = false;
         loss_announced_    = false;
         valid_pulse_count_ = 1u;
-        last_pulse_stamp_  = stamp;
+        last_pulse_stamp_  = stamp_us;
         period_est_us_     = 0.0;
         integrator_        = 0.0;
-        return;
+        return false;
     }
 
-    /* ── Valid pulse ────────────────────────────────────────────────── */
     const double dt_d = static_cast<double>(dt);
     if (period_est_us_ <= 0.0)
         period_est_us_ = dt_d;
@@ -184,32 +166,72 @@ void ClockFollower::Update(uint32_t now_us)
         period_est_us_ += static_cast<double>(ema_alpha_)
                        * (dt_d - period_est_us_);
 
-    last_pulse_stamp_ = stamp;
+    last_pulse_stamp_ = stamp_us;
     ++valid_pulse_count_;
     loss_announced_   = false;
 
-    /* ── Lock acquisition ──────────────────────────────────────────── */
-    if (!locked_)
+    if (!locked_ && valid_pulse_count_ >= kClockLockPulses)
+        DeclareLock(stamp_us);
+
+    return true;
+}
+
+/* ── Per-poll work ─────────────────────────────────────────────────────── */
+
+void ClockFollower::Update(uint32_t now_us)
+{
+    if (!enabled_ || nco_ == nullptr) return;
+
+    /* ── Drain the ring (bounded by the head snapshot).  `accepted`
+     *    counts valid pulses consumed while already locked — the PI's
+     *    expected NCO travel scales with it. */
+    const uint32_t head     = ring_head_;
+    uint32_t       accepted = 0u;
+    for (uint32_t tail = ring_tail_; tail != head;)
     {
-        if (valid_pulse_count_ >= kClockLockPulses)
-            DeclareLock();
-        return; /* no PI step until locked */
+        const uint32_t stamp = pulse_ring_[tail % kPulseRingSize];
+        ring_tail_           = ++tail;
+
+        const bool was_locked = locked_;
+        if (ConsumePulse(stamp) && was_locked)
+            ++accepted;
     }
 
-    /* ── PI controller (post-lock) ─────────────────────────────────── */
+    /* ── Loss detection.  After the drain so buffered pulses count as
+     *    heard; signed because a pulse can stamp after `now_us` was
+     *    sampled at the top of the poll. */
+    if (have_last_stamp_ && period_est_us_ > 0.0 && !loss_announced_)
+    {
+        const int32_t dt_since =
+            static_cast<int32_t>(now_us - last_pulse_stamp_);
+        const double thresh =
+            period_est_us_ * static_cast<double>(kClockLossFactor);
+        if (dt_since > 0 && static_cast<double>(dt_since) > thresh)
+        {
+            HandleLoss(now_us);
+            return;
+        }
+    }
+
+    if (!locked_ || accepted == 0u)
+        return;
+
+    /* ── PI controller (post-lock).  Both ends of the phase delta are
+     *    taken at pulse-stamp time (`FracTickAt`), so drain lateness
+     *    cancels out of the phase error. */
     const double ticks_per_pulse =
         static_cast<double>(nco_->Ppqn()) / static_cast<double>(ext_ppqn_);
 
-    const uint64_t mtick = nco_->MasterTick();
-    const double   frac  = nco_->FracTick();
+    const uint64_t mtick         = nco_->MasterTick();
+    const double   frac_at_stamp = FracTickAt(last_pulse_stamp_);
 
     /* Wrap-safe even past 2^64 ticks because the unsigned subtraction
      * mods over 2^64; in practice master_tick_ tops out at ~6 trillion
      * years at 96 PPQN / 300 BPM so this is theoretical. */
-    const double delta_int  = static_cast<double>(mtick - last_pulse_tick_);
-    const double delta_frac = frac - last_pulse_frac_;
-    const double delta      = delta_int + delta_frac;
-    const double phase_err  = ticks_per_pulse - delta;
+    const double delta = static_cast<double>(mtick - last_pulse_tick_)
+                       + (frac_at_stamp - last_pulse_frac_);
+    const double phase_err =
+        static_cast<double>(accepted) * ticks_per_pulse - delta;
 
     integrator_ += phase_err;
     integrator_  = Clamp(integrator_,
@@ -230,19 +252,31 @@ void ClockFollower::Update(uint32_t now_us)
 
     nco_->SetTicksPerUs(rate_per_sec * 1e-6);
 
-    /* Update anchor for next pulse's phase-error measurement. */
+    /* Anchor for the next measurement. */
     last_pulse_tick_ = mtick;
-    last_pulse_frac_ = frac;
+    last_pulse_frac_ = frac_at_stamp;
 }
 
 /* ── State transitions ─────────────────────────────────────────────────── */
 
-void ClockFollower::DeclareLock()
+/* NCO fractional position extrapolated from the last `Tick` to a pulse
+ * stamp; exact while the rate is constant across the span. */
+double ClockFollower::FracTickAt(uint32_t stamp_us) const
+{
+    const int32_t span_us =
+        static_cast<int32_t>(stamp_us - nco_->LastTickUs());
+    return nco_->FracTick()
+         + nco_->TicksPerUs() * static_cast<double>(span_us);
+}
+
+void ClockFollower::DeclareLock(uint32_t stamp_us)
 {
     locked_ = true;
 
+    /* Anchor before seeding: the extrapolation in AnchorPhase must use
+     * the rate the NCO has been integrating with. */
+    AnchorPhase(stamp_us);
     SeedRateFromPeriod();
-    AnchorPhase();
     integrator_ = 0.0;
 
     nco_->OrPendingEvent(CLK_EV::EXT_LOCK);
@@ -260,10 +294,10 @@ void ClockFollower::SeedRateFromPeriod()
     nco_->SetTicksPerUs(rate_per_sec * 1e-6);
 }
 
-void ClockFollower::AnchorPhase()
+void ClockFollower::AnchorPhase(uint32_t stamp_us)
 {
     last_pulse_tick_ = nco_->MasterTick();
-    last_pulse_frac_ = nco_->FracTick();
+    last_pulse_frac_ = FracTickAt(stamp_us);
 }
 
 void ClockFollower::HandleLoss(uint32_t /*now_us*/)
