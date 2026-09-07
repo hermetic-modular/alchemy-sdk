@@ -61,9 +61,15 @@ void ControlLoop::Tick()
 
         for (uint8_t i = 0; i < num_cv_; i++) cv_[i] = hw_->cv[i].Value();
 
+        // Initialize after hw.Init(); share one timestamp across this poll.
+        const uint32_t raw_tick = daisy::System::GetTick();
+        if (!poll_timebase_.Initialized())
+            poll_timebase_.Init(daisy::System::GetTickFreq(), raw_tick);
+        const uint32_t t_us = poll_timebase_.Update(raw_tick);
+
         if (settings_) settings_->PollButtons(t_ms);
         const bool gated = settings_ && settings_->IsActive();
-        if (cv_source_) cv_source_->PollEdges(cv_, daisy::System::GetUs());
+        if (cv_source_) cv_source_->PollEdges(cv_, t_us);
         if (locks_)   locks_  ->PollButtons(t_ms, gated);
         if (buttons_)
             buttons_->PollButtons(t_ms, gated,

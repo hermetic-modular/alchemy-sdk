@@ -27,6 +27,10 @@ target_link_libraries(clock_follower_test PRIVATE alchemy::primitives)
 
 add_test(NAME clock_follower COMMAND clock_follower_test)
 
+add_executable(tick_timebase_test tick_timebase_test.cpp)
+target_link_libraries(tick_timebase_test PRIVATE alchemy::primitives)
+add_test(NAME tick_timebase COMMAND tick_timebase_test)
+
 add_executable(pot_gate_test pot_gate_test.cpp)
 target_link_libraries(pot_gate_test PRIVATE alchemy::primitives)
 

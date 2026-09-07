@@ -69,7 +69,7 @@ static CvEdge          clk_edge;
 
 static void OnPoll(uint32_t /*t_ms*/)
 {
-    const uint32_t now_us = daisy::System::GetUs();
+    const uint32_t now_us = loop.PollTimeUs();
 
     /* CvEdge wants the *raw* CV buffer.  The same buffer the ControlLoop
      * built this frame is exposed via loop.Cv(); each entry is the
