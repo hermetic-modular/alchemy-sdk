@@ -26,22 +26,39 @@
  *     ring blinking bright   : failure — the blinking ring is the jack
  *                              that failed (no blinking ring = failure
  *                              before the sweeps). Power-cycle, retry.
- *                              A previous good record survives failure
+ *                              A previous good record survives measurement failure
  *                              (a torn QSPI write fails CRC on the next
  *                              boot and falls back cleanly).
  *
  * Preconditions: nothing patched into any CV jack (the zero pass measures
- * open-jack idle), board warmed up ~30 s for best results.
+ * open-jack idle). No warm-up wait is required by the procedure.
  *
- * For bench-grade diagnostics (full USB dump of every sweep point) use
- * the standalone `cal_writer` firmware in alchemy-lab-v2-cal-sanity/.
+ * For automated paired CV and codec testing with USB reports, use the
+ * separate alchemy-calibrator production station. Its paired harness must
+ * not be used with this unpatched button procedure.
  */
 
 #pragma once
 
+#include "alchemy/hw/v2_calibration.h"
+
 namespace alchemy {
 
 class AlchemyLabV2;
+
+/** Exclusive raw ADC access for calibration. Stop the streaming ADC before
+ * Init; these readings bypass any previously loaded calibration. Do not restart
+ * DMA until the calibration ADC has been relinquished (normally by reboot).
+ * Each read starts and waits for a new conversion; no delayed DMA snapshots. */
+bool V2CalibrationAdcInit();
+bool V2CalibrationReadJack(uint8_t jack, uint16_t& raw);
+bool V2CalibrationReadReference(uint16_t& raw);
+
+/** Validates, persists, restores QSPI mapping and verifies the record.
+ * Caller must run from SRAM, stop audio/other QSPI clients, and park outputs.
+ * Measurement failures never enter here; a power loss during this single-sector
+ * write can invalidate the old record. The loader rejects torn records. */
+bool V2PersistCalibration(AlchemyLabV2& hw, const V2Calibration& cal);
 
 /** True when B1 and B2 are both held (raw GPIO read with pull-ups —
  *  callable before any board init beyond DaisySeed::Init()). */

@@ -1,16 +1,16 @@
 /**
  * @file v2_calibration.cpp
- * @brief V2 calibration record — CRC, QSPI load, design fallback.
+ * @brief V2 calibration record: portable CRC/fallback and QSPI load.
+ *
+ * Keep these definitions in the original source file for firmware Makefiles
+ * that enumerate SDK sources explicitly. Host tests compile the same portable
+ * code; only the memory-mapped hardware reader is excluded there.
  */
 
 #include "alchemy/hw/v2_calibration.h"
-
 #include <cstring>
 
-#include "daisy_seed.h"  /* stm32h7xx.h → SCB_InvalidateDCache_by_Addr */
-
 namespace alchemy {
-
 uint32_t V2CalCrc32(const void* data, size_t len)
 {
     constexpr uint32_t kPolynomial = 0xEDB88320u;
@@ -23,26 +23,6 @@ uint32_t V2CalCrc32(const void* data, size_t len)
             crc = (crc >> 1) ^ ((crc & 1u) ? kPolynomial : 0u);
     }
     return crc ^ 0xFFFFFFFFu;
-}
-
-bool V2CalLoadFromQspi(V2Calibration& out)
-{
-    /* QSPI is memory-mapped after DaisySeed::Init() (BOOT_SRAM apps).
-     * The D-cache may hold stale lines for the region — e.g. right after
-     * a factory-cal write — so invalidate before reading. The address is
-     * sector-aligned; round the length up to a full cache line. */
-    SCB_InvalidateDCache_by_Addr(
-        reinterpret_cast<uint32_t*>(kV2CalQspiAddr),
-        static_cast<int32_t>((sizeof(V2Calibration) + 31u) & ~31u));
-
-    std::memcpy(&out,
-                reinterpret_cast<const void*>(kV2CalQspiAddr),
-                sizeof(V2Calibration));
-
-    if (out.magic != kV2CalMagic)                   return false;
-    if (out.schema_version != kV2CalSchemaVersion)  return false;
-    if (V2CalComputeCrc(out) != out.crc32)          return false;
-    return true;
 }
 
 void V2CalDesignFallback(V2Calibration& out)
@@ -69,4 +49,35 @@ void V2CalDesignFallback(V2Calibration& out)
     out.crc32 = V2CalComputeCrc(out);
 }
 
+
 } // namespace alchemy
+
+#if !defined(ALCHEMY_CALIBRATION_HOST_TEST)
+#include "alchemy/hw/v2_calibration_checks.h"
+#include "daisy_seed.h"
+
+namespace alchemy {
+
+bool V2CalLoadFromQspi(V2Calibration& out)
+{
+    /* QSPI is memory-mapped after DaisySeed::Init() (BOOT_SRAM apps).
+     * The D-cache may hold stale lines for the region — e.g. right after
+     * a factory-cal write — so invalidate before reading. The address is
+     * sector-aligned; round the length up to a full cache line. */
+    SCB_InvalidateDCache_by_Addr(
+        reinterpret_cast<uint32_t*>(kV2CalQspiAddr),
+        static_cast<int32_t>((sizeof(V2Calibration) + 31u) & ~31u));
+
+    std::memcpy(&out,
+                reinterpret_cast<const void*>(kV2CalQspiAddr),
+                sizeof(V2Calibration));
+
+    if (out.magic != kV2CalMagic)                   return false;
+    if (out.schema_version != kV2CalSchemaVersion)  return false;
+    if (V2CalComputeCrc(out) != out.crc32)          return false;
+    return V2CalRecordPlausible(out);
+}
+
+} // namespace alchemy
+
+#endif
