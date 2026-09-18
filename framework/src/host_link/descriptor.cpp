@@ -1037,19 +1037,10 @@ void DescriptorBuilder::EmitRootButtons()
         w_.Key("name"); w_.Str(b.Name()  ? b.Name()  : "");
         w_.Key("role"); w_.Str(VirtualButton::RoleName(b.RoleValue()));
 
-        if (b.NumActions() > 0u)
+        if (b.TapGesture().used || b.HoldGesture().used || b.NumActions() > 0u)
         {
             w_.Key("actions");
-            w_.BeginArr();
-            for (uint8_t j = 0; j < b.NumActions(); j++)
-            {
-                w_.BeginObj();
-                w_.Key("gesture"); w_.Str(b.ActionGesture(j) ? b.ActionGesture(j) : "");
-                w_.Key("label");   w_.Str(b.ActionLabel  (j) ? b.ActionLabel  (j) : "");
-                if (b.ActionHelp(j)) { w_.Key("help"); w_.Str(b.ActionHelp(j)); }
-                w_.EndObj();
-            }
-            w_.EndArr();
+            EmitGestures(w_, b, /*implicit_tap=*/false);
         }
         if (b.NumControls() > 0u)
         {

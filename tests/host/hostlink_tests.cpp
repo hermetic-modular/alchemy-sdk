@@ -1539,6 +1539,61 @@ static void TestButtonsEmission()
     CHECK(IsErrorDescriptor(buf3, len3));
 }
 
+static void TestRootButtonGestures()
+{
+    SurfaceFixture sf;
+    using B = VirtualButton;
+    static const char* kLabels[] = {"Off", "On"};
+    const struct
+    {
+        B button;
+        const char* actions;
+    } cases[] = {
+        {B("root.tap", "Trigger")
+             .Tap(+[](void*) {}, "Fire")
+             .GestureHelp("tap", "Fire once."),
+         R"("actions":[{"gesture":"tap","label":"Fire","help":"Fire once."}])"},
+        {B("root.hold", "Reset")
+             .Hold(600, +[](void*) {}, "Reset")
+             .GestureHelp("hold", "Restore defaults."),
+         R"("actions":[{"gesture":"hold","label":"Reset","help":"Restore defaults."}])"},
+        {B("root.mixed", "Mode")
+             .Selector(kLabels)
+             .Tap(B::Action::Toggle)
+             .HoldSet(600, 0)
+             .GestureHelp("hold", "Turn off.")
+             .Action("hold+knob", "Record")
+             .GestureHelp("hold+knob", "Record motion."),
+         R"("actions":[{"gesture":"tap","label":"Toggle Off / On"},{"gesture":"hold","label":"Set Off","help":"Turn off."},{"gesture":"hold+knob","label":"Record","help":"Record motion."}])"},
+        {B("root.legacy", "Lock")
+             .Action("Long Press", "Record")
+             .GestureHelp("Long Press", "Record motion."),
+         R"("actions":[{"gesture":"Long Press","label":"Record","help":"Record motion."}])"},
+        /* Root metadata must not invent the bank's implicit tap. */
+        {B("root.bare", "Mode").Selector(kLabels), nullptr},
+    };
+
+    for (const auto& c : cases)
+    {
+        const B* refs[] = {&c.button};
+        char buf[16384];
+        const uint32_t len = RenderDescriptor(
+            buf, sizeof buf, kAutoInfo, sf.presets,
+            nullptr, nullptr, 0, refs, 1);
+        CHECK(len > 0u);
+        CHECK(!IsErrorDescriptor(buf, len));
+        const std::string json(buf, len);
+        const auto start = json.find("\"buttons\":[");
+        CHECK(start != std::string::npos);
+        if (start == std::string::npos) continue;
+        const auto root = json.substr(start);
+        if (c.actions)
+            CHECK(root.find(c.actions) != std::string::npos);
+        else
+            CHECK(root.find("\"actions\":") == std::string::npos);
+    }
+}
+
 /** Custom Serializable that emits per-kind metadata via ComponentWriter::Meta
  *  — the pattern the ParamLock describer uses. */
 template <size_t N>
@@ -2136,6 +2191,7 @@ int main(int argc, char** argv)
     TestManualHashStability();
     TestFactoryDefaultsImage();
     TestButtonsEmission();
+    TestRootButtonGestures();
     TestComponentMeta();
     TestJsonCheck();
     TestDescriptorJsonValidation();
