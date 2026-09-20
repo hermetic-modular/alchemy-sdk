@@ -154,9 +154,9 @@ class AlchemyLabV2
      */
     void ProcessAllControls();
 
-    /** Start audio with the given callback. Installs the trigger /
-     *  codec-CV shim around it transparently. */
-    void StartAudio(daisy::AudioHandle::AudioCallback cb);
+    /** Start audio and J1/J2 trigger capture. Omit the callback for
+     *  trigger-only use; unclaimed codec outputs are silent. */
+    void StartAudio(daisy::AudioHandle::AudioCallback cb = nullptr);
 
     bool FlushCvOutputs();
 

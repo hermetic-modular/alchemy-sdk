@@ -159,8 +159,7 @@ void AlchemyLabV2::Init(daisy::SaiHandle::Config::SampleRate sample_rate,
     }
     cv_jacks[kNumCvInputs + 0].InitCodec(kCodecOutChJ9);   /* J9  */
     cv_jacks[kNumCvInputs + 1].InitCodec(kCodecOutChJ10);  /* J10 */
-    /* TriggerJacks need no per-instance binding — channel indexing is
-     * implicit (triggers[0] ↔ in[0], triggers[1] ↔ in[1]) in AudioShim. */
+    /* TriggerJacks are initialized with the codec rate in StartAudio(). */
 
     /* 10) SDMMC1 @ MEDIUM_SLOW / BITS_1 */
     {
@@ -213,6 +212,7 @@ void AlchemyLabV2::ProcessAllControls()
 
 void AlchemyLabV2::StartAudio(daisy::AudioHandle::AudioCallback cb)
 {
+    for (auto& trigger : triggers) trigger.Init(seed.AudioSampleRate());
     user_cb_    = cb;
     s_instance_ = this;
     seed.StartAudio(&AlchemyLabV2::AudioShim);
@@ -232,6 +232,8 @@ void AlchemyLabV2::AudioShim(daisy::AudioHandle::InputBuffer  in,
 
     /* User audio callback runs as written. */
     if (hw->user_cb_) hw->user_cb_(in, out, size);
+    else
+        for (size_t i = 0; i < size; ++i) out[0][i] = out[1][i] = 0.f;
 
     /* Post: for any codec jack claimed for CV out (EnableCvOutput), fill
      * its channel with the staged target value. Whatever the user wrote
