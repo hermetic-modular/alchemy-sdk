@@ -32,4 +32,9 @@ target_link_libraries(pot_gate_test PRIVATE alchemy::primitives)
 
 add_test(NAME pot_gate COMMAND pot_gate_test)
 
+add_executable(firmware_image_test firmware_image_test.cpp)
+target_link_libraries(firmware_image_test PRIVATE alchemy::primitives)
+
+add_test(NAME firmware_image COMMAND firmware_image_test)
+
 add_subdirectory(host)

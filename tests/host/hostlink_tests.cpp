@@ -41,6 +41,7 @@
 #include "alchemy/surface/virtual_knob.h"
 
 #include "button_tests.h"
+#include "firmware_tests.h"
 #include "fs_tests.h"
 #include "pager_nav_tests.h"
 #include "param_lock_tests.h"
@@ -2147,6 +2148,7 @@ int main(int argc, char** argv)
     RunButtonTests(g_checks, g_failures);
     RunPagerNavTests(g_checks, g_failures);
     RunFsTests(g_checks, g_failures);
+    RunFirmwareTests(g_checks, g_failures);
 
     std::printf("%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

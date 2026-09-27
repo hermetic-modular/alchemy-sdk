@@ -16,10 +16,13 @@
  * - LED ring per pot displaying summed value.
  * - Save and recall presets with flash wear leveling.
  * - Settings menu for managing basics
+ * - Change firmware from the SD card (Settings page 2)
  */
 
 #include "daisy_seed.h"
 #include "alchemy/hw/alchemy_lab.h"
+#include "alchemy/storage/firmware_picker.h"
+#include "alchemy/storage/sd_card.h"
 #include "alchemy/surface/control_loop.h"
 #include "alchemy/surface/cv_matrix.h"
 #include "alchemy/surface/page.h"
@@ -120,6 +123,8 @@ static ParamLock<2 * kNumPots, LockLength<30, 20>>
 static Presets                           presets (hw.seed.qspi);
 static Settings                          settings(hw, &pager);
 static CvMatrix                          cv_matrix(kNumCvInputs);
+static SdCard                            sd;
+static FirmwarePicker                    picker;
 
 /* summed CV+knob values → DSP each frame */
 static constexpr float kMidQ      = 1.2f;
@@ -153,6 +158,11 @@ int main()
     /* Opting into default settings gestures and controls.*/
     settings.UseBrightness();
     settings.UsePresets(presets);
+
+    /* Settings page 2 lists the .bin files in /alchemy on the SD card and
+     * flashes the one you pick.  B1 steps to it while Settings is open. */
+    sd.Init();
+    picker.Install(settings, 1, sd, hw);
 
     /* Preset payload — every Serializable surface gets walked on Save/Load. */
     presets.Manage(pager);

@@ -143,6 +143,21 @@ SECTIONS
 		PROVIDE(__bss_end__ = _ebss);
 	} > DTCMRAM
 
+	/* .axi_bss -- DMA-reachable storage for the SD card path.  SdCard,
+	 * FsExtension and FirmwarePicker place their FIL / DIR / staging
+	 * buffers here (ALCHEMY_SDMMC_BSS in alchemy/storage/sd_card.h):
+	 * SDMMC1's IDMA cannot address DTCM, where .bss lives in this image.
+	 * NOLOAD: every object placed here is cleared before first use. */
+	.axi_bss (NOLOAD) :
+	{
+		. = ALIGN(32);
+		_saxi_bss = .;
+		*(.axi_bss)
+		*(.axi_bss*)
+		. = ALIGN(32);
+		_eaxi_bss = .;
+	} > SRAM
+
 	.dtcmram_bss (NOLOAD) :
 	{
 		. = ALIGN(4);
