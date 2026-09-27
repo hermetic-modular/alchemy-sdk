@@ -22,6 +22,13 @@ target_link_libraries(cv_input_test PRIVATE alchemy::primitives)
 
 add_test(NAME cv_input COMMAND cv_input_test)
 
+# The codec CV transfer is independent of the hardware drivers.
+add_executable(v2_codec_cv_test v2_codec_cv_test.cpp)
+target_include_directories(v2_codec_cv_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../hardware/alchemy-lab/v2/include")
+
+add_test(NAME v2_codec_cv COMMAND v2_codec_cv_test)
+
 add_executable(clock_follower_test clock_follower_test.cpp)
 target_link_libraries(clock_follower_test PRIVATE alchemy::primitives)
 

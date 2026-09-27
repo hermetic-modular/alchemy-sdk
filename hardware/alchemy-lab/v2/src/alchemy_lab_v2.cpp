@@ -10,6 +10,7 @@
  */
 
 #include "alchemy/hw/alchemy_lab_v2.h"
+#include "alchemy/hw/v2_codec_cv.h"
 #include "alchemy/hw/v2_factory_cal.h"
 
 #include "ff.h"
@@ -242,7 +243,7 @@ void AlchemyLabV2::AudioShim(daisy::AudioHandle::InputBuffer  in,
     {
         CvJack& j = hw->cv_jacks[kNumCvInputs + k];
         if (!j.connected_) continue;
-        const float sample = j.target_v_ / kCodecJackFullScaleVolts;
+        const float sample = V2CodecCvSample(j.target_v_);
         const uint8_t ch = j.codec_channel_;
         for (size_t i = 0; i < size; ++i) out[ch][i] = sample;
     }
