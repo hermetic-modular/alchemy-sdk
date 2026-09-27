@@ -142,6 +142,7 @@ if(CMAKE_CROSSCOMPILING)
 add_library(alchemy_storage STATIC
     src/storage/sd_card.cpp
     src/storage/fs_extension.cpp
+    src/storage/firmware_catalog.cpp
 )
 add_library(alchemy::storage ALIAS alchemy_storage)
 
