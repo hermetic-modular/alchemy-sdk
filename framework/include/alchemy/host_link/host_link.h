@@ -66,6 +66,10 @@ class HostLink
     HostLink(IHostTransport& transport, Presets& presets, const Info& info,
              uint8_t* staging, uint8_t* snapshot, size_t buf_cap);
 
+    /** Identity, reboot and extensions without a preset store. HELLO
+     * reports zero slots/live size; preset operations are unsupported. */
+    HostLink(IHostTransport& transport, const Info& info);
+
     /** Attach the pre-rendered descriptor JSON (see DescriptorBuilder).
      *  Pass len = 0 to advertise "no descriptor".  The buffer must stay
      *  valid for the lifetime of the link. */
@@ -119,7 +123,7 @@ class HostLink
     void AbortStage() { stage_open_ = false; stage_recv_ = 0u; }
 
     IHostTransport& transport_;
-    Presets&        presets_;
+    Presets*        presets_ = nullptr;
     Info            info_;
 
     const uint8_t* desc_     = nullptr;
@@ -133,8 +137,8 @@ class HostLink
     uint8_t     wire_[kMaxWire];           /* response, COBS-encoded   */
 
     /* Host→device staged blob (BLOB_BEGIN/DATA/COMMIT); caller-owned. */
-    uint8_t* staging_;
-    size_t   buf_cap_;
+    uint8_t* staging_ = nullptr;
+    size_t   buf_cap_ = 0u;
     bool     stage_open_    = false;
     uint8_t  stage_target_  = 0u;
     uint32_t stage_total_   = 0u;
@@ -143,7 +147,7 @@ class HostLink
     uint32_t stage_last_ms_ = 0u;
 
     /* Device→host live snapshot (GET_LIVE); caller-owned. */
-    uint8_t* snapshot_;
+    uint8_t* snapshot_ = nullptr;
     uint16_t snap_len_   = 0u;
     bool     snap_valid_ = false;
 

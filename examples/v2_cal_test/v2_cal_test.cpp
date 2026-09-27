@@ -27,7 +27,8 @@
  * blink is active), keeping the WS2812 data line quiet for clean scope
  * measurements.
  *
- * Each button press also emits a USB CDC line (115200, any terminal):
+ * Each button press also emits a HostLink diagnostic message (open the
+ * programmer Device console or hostlink-cli logs --follow):
  *   target, mode, and per-jack DAC code + cal-vs-design delta in volts.
  *
  * To (re)calibrate: hold B1 + B2 through a reset. Factory cal runs
@@ -36,9 +37,13 @@
  */
 
 #include "alchemy/hw/alchemy_lab_v2.h"
+#include "alchemy/host_link/host.h"
+#include "alchemy/host_link/diagnostics.h"
 
 using namespace alchemy;
 
+static alchemy::hostlink::Diagnostics debug;
+static alchemy::hostlink::Host host("v2_cal_test", "V2 Calibration Test", "1.0.0", "example");
 static AlchemyLabV2 hw;
 
 /* −5 .. +5 in 1 V steps. Start index 5 = 0 V. */
@@ -158,9 +163,9 @@ static void ApplyOutputs(size_t step, bool calibrated)
 
     /* One status burst per press — small enough for live CDC. */
     const uint16_t dcode = DesignCode(v);
-    hw.seed.PrintLine("");
+    debug.PrintLine("%s", "");
     daisy::System::Delay(100);
-    hw.seed.PrintLine("Target %s%d.00 V  |  %s  |  design_code=%u",
+    debug.PrintLine("Target %s%d.00 V  |  %s  |  design_code=%u",
                       (v < 0) ? "-" : "+",
                       (int)((v < 0) ? -v : v),
                       calibrated ? "CALIBRATED" : "UNCALIBRATED",
@@ -176,7 +181,7 @@ static void ApplyOutputs(size_t step, bool calibrated)
                 * hw.Calibration().jack[j].dac_gain_v_per_code;
             /* Manual fixed-point print: PrintLine's %f support varies. */
             const int mv = (int)(delta_v * 1000.0f + (delta_v >= 0 ? 0.5f : -0.5f));
-            hw.seed.PrintLine("  J%d: code=%4u  delta=%+d mV%s",
+            debug.PrintLine("  J%d: code=%4u  delta=%+d mV%s",
                               j + 3, (unsigned)cc, mv,
                               IsClamped(j, v)
                                   ? "  (clamped at measured range)" : "");
@@ -188,13 +193,13 @@ static void ApplyOutputs(size_t step, bool calibrated)
 int main()
 {
     hw.Init();
-    hw.seed.StartLog(false);
+    host.Extend(debug);
 
     for (uint8_t j = 0; j < kNumDacOuts; ++j)
         hw.cv_jacks[j].EnableCvOutput();
 
     daisy::System::Delay(500);
-    hw.seed.PrintLine("=== V2 CAL TEST ===  IsCalibrated=%d  (B1: step volts, B2: cal on/off)",
+    debug.PrintLine("=== V2 CAL TEST ===  IsCalibrated=%d  (B1: step volts, B2: cal on/off)",
                       (int)hw.IsCalibrated());
 
     size_t step       = 5;     /* 0 V */
@@ -206,6 +211,7 @@ int main()
 
     while (true)
     {
+        host.Poll(daisy::System::GetNow());
         hw.ProcessAllControls();
 
         if (hw.buttons[kButtonB1].RisingEdge())

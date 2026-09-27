@@ -45,13 +45,17 @@ static void DefaultReboot(uint8_t mode, void*)
 
 Host::Host(Presets& presets, const char* id, const char* name,
            const char* fw_version, const char* git_hash)
-    : presets_(presets), id_(id), name_(name), fw_(fw_version), git_(git_hash)
+    : presets_(&presets), id_(id), name_(name), fw_(fw_version), git_(git_hash)
 {
     /* Pre-BootLoad hook: snapshot factory state before the boot preset
      * lands.  The descriptor renders later, at the first Poll(), when
      * everything main() declares is attached — call order never matters. */
-    presets_.SetPreBootHook(&PreBootTrampoline, this);
+    presets_->SetPreBootHook(&PreBootTrampoline, this);
 }
+
+Host::Host(const char* id, const char* name,
+           const char* fw_version, const char* git_hash)
+    : id_(id), name_(name), fw_(fw_version), git_(git_hash) {}
 
 void Host::PreBootTrampoline(void* self)
 {
@@ -60,8 +64,8 @@ void Host::PreBootTrampoline(void* self)
 
 void Host::CaptureFactory()
 {
-    if (factory_len_) return;
-    factory_len_ = presets_.SerializeLive(s_snapshot, sizeof s_snapshot);
+    if (!presets_ || factory_len_) return;
+    factory_len_ = presets_->SerializeLive(s_snapshot, sizeof s_snapshot);
 }
 
 Host& Host::Product(const char* usb_product) { product_ = usb_product; return *this; }
@@ -134,8 +138,16 @@ Host& Host::Buttons(const VirtualButton* buttons, uint8_t count)
 
 Host& Host::Extend(IHostlinkExtension& ext)
 {
-    if (num_extensions_ < HostLink::kMaxExtensions)
-        extensions_[num_extensions_++] = &ext;
+    for (uint8_t i = 0u; i < num_extensions_; ++i)
+        if (extensions_[i] == &ext) return *this;
+    bool ok = !started_ && num_extensions_ < HostLink::kMaxExtensions
+        && ext.FirstCmd() >= 0x50u && ext.FirstCmd() <= ext.LastCmd()
+        && ext.LastCmd() <= 0x7Fu;
+    for (uint8_t i = 0u; ok && i < num_extensions_; ++i)
+        if (ext.FirstCmd() <= extensions_[i]->LastCmd()
+            && ext.LastCmd() >= extensions_[i]->FirstCmd()) ok = false;
+    if (ok) extensions_[num_extensions_++] = &ext;
+    else configuration_ok_ = false;
     return *this;
 }
 
@@ -146,7 +158,7 @@ void Host::Start()
     if (started_) return;
     started_ = true;
 
-    if (!staging_)
+    if (presets_ && !staging_)
     {
         /* s_snapshot may hold the factory image — consumed below, then
          * free for the link's GET_LIVE scratch. */
@@ -155,7 +167,7 @@ void Host::Start()
         snapshot_ = s_snapshot;
         buf_cap_  = sizeof s_staging;
     }
-    if (!desc_buf_ && !manual_desc_)
+    if (presets_ && !desc_buf_ && !manual_desc_)
     {
         std::memset(s_descriptor, 0, sizeof s_descriptor);
         desc_buf_ = s_descriptor;
@@ -185,17 +197,19 @@ void Host::Start()
     const char*       board_name  = "v1";
 #endif
 
-    link_ = new (link_storage_) HostLink(
-        *transport_, presets_,
-        HostLink::Info{id_, name_, fw_, git_, ALCHEMY_SDK_VERSION,
-                       kBoardNum, boot_slot_},
-        staging_, snapshot_, buf_cap_);
+    const HostLink::Info info{id_, name_, fw_, git_, ALCHEMY_SDK_VERSION,
+                              kBoardNum, boot_slot_};
+    if (presets_)
+        link_ = new (link_storage_) HostLink(
+            *transport_, *presets_, info, staging_, snapshot_, buf_cap_);
+    else
+        link_ = new (link_storage_) HostLink(*transport_, info);
 
     if (manual_desc_)
     {
         link_->SetDescriptor(manual_desc_, manual_desc_len_);
     }
-    else
+    else if (presets_)
     {
         /* Page metadata: explicit .Pages() wins; else whatever the
          * attached ControlLoop has by now. */
@@ -221,7 +235,7 @@ void Host::Start()
             desc_buf_, desc_cap_,
             DescriptorBuilder::ModuleInfo{id_, name_, fw_, git_,
                                           ALCHEMY_SDK_VERSION, board_name},
-            presets_, num_pages_ ? &set : nullptr,
+            *presets_, num_pages_ ? &set : nullptr,
             overrides_, num_overrides_,
             num_buttons_ ? btn_ptrs_ : nullptr, num_buttons_,
             num_frags ? frags : nullptr, num_frags,
@@ -250,7 +264,7 @@ void Host::Start()
                             reboot_fn_ ? reboot_ctx_ : nullptr);
 
     for (uint8_t i = 0u; i < num_extensions_; i++)
-        link_->Extend(*extensions_[i]);
+        if (!link_->Extend(*extensions_[i])) configuration_ok_ = false;
 }
 
 void Host::Poll(uint32_t t_ms)

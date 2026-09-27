@@ -4,7 +4,8 @@
  *
  * The whole integration is one declaration and one attach:
  *
- *   static hostlink::Host host(presets, "hostlink_demo", ...);
+ *   static hostlink::Diagnostics debug;
+static hostlink::Host host(presets, "hostlink_demo", ...);
  *   ...
  *   loop.Use(host);
  *
@@ -25,6 +26,7 @@
 
 #include "alchemy/hw/alchemy_lab.h"
 #include "alchemy/host_link/host.h"
+#include "alchemy/host_link/diagnostics.h"
 #include "alchemy/surface/button_bank.h"
 #include "alchemy/surface/control_loop.h"
 #include "alchemy/surface/page.h"
@@ -163,6 +165,7 @@ static ButtonBank  buttons;
 /* The host: module identity once, everything else defaulted.  The USB
  * product string defaults to the display name; Hermetic modules pass
  * .Product("Alchemy Lab") to enumerate under the platform name. */
+static hostlink::Diagnostics debug;
 static hostlink::Host host(presets, "hostlink_demo", "HostLink Demo",
                            "1.0.0", "example");
 
@@ -192,6 +195,8 @@ static void Passthrough(daisy::AudioHandle::InputBuffer  in,
 int main()
 {
     hw.Init();
+    host.Extend(debug);
+    debug.Info("HostLink demo booting");
 
     settings.UseBrightness();
     settings.UsePresets(presets);

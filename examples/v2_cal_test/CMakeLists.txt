@@ -14,4 +14,4 @@ endif()
 daisy_executable(
     NAME    v2_cal_test
     SOURCES v2_cal_test.cpp
-    LIBS    alchemy::board_alchemy_lab_v2)
+    LIBS    alchemy::board_alchemy_lab_v2 alchemy::host_link)

@@ -161,28 +161,25 @@ for free; adding field labels gets it a full descriptor-driven editor on
 the host with zero host-side code per module.
 
 ```cpp
-#include "alchemy/host_link/cdc_transport.h"
-#include "alchemy/host_link/host_link.h"
+#include "alchemy/host_link/host.h"
+#include "alchemy/host_link/diagnostics.h"
 
-static alchemy::hostlink::CdcUsbTransport transport;
-static uint8_t staging[alchemy::kPresetBlobCapacity]  DSY_SDRAM_BSS;
-static uint8_t snapshot[alchemy::kPresetBlobCapacity] DSY_SDRAM_BSS;
-static alchemy::hostlink::HostLink link(
-    transport, presets,
-    {.module_id="mymod", .module_name="My Module", .fw_version="1.0.0",
-     .fw_git=GIT_HASH, .sdk_version=ALCHEMY_SDK_VERSION,
-     .board=2, .boot_slot=0},
-    staging, snapshot, sizeof(staging));
+static alchemy::hostlink::Host host(
+    presets, "mymod", "My Module", "1.0.0", GIT_HASH);
+static alchemy::hostlink::Diagnostics debug; // optional
 
-transport.Init(hw.seed.usb_handle, daisy::UsbHandle::FS_EXTERNAL,
-               "Alchemy Lab");
-link.SetDescriptor(descriptor_json, descriptor_len);  // optional but recommended
-link.SetUid(mcu_uid);
-link.SetRebootHandler(&reboot, nullptr);
-
-// in the control loop (1 ms inner poll recommended):
-link.Poll(now_ms);   // pump + command execution
+// After hw.Init(), before loop.Tick():
+host.Extend(debug);
+loop.Use(host);
+debug.Info("Ready");
 ```
+
+The Host defaults transport, board-specific USB port, buffers, identity,
+and descriptor generation. For a diagnostics-only firmware, omit the
+`presets` constructor argument. See [USB diagnostics](docs/diagnostics.md)
+for messages, live values, CLI viewing, and the web programmer console.
+The lower-level transport and engine APIs remain available for custom
+integrations.
 
 All command execution happens in `Poll()` (the control-loop context),
 never the audio ISR, so host commands serialize naturally with on-device

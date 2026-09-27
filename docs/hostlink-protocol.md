@@ -762,3 +762,181 @@ The final path only ever appears via the commit-time rename, and
   cards only (`FS_NO_CARD` on exFAT), 4 GiB per file, ASCII names
   (firmware-side validation; hosts should sanitize upload names and
   say so).
+
+
+## 9. Diagnostics (commands 0x60–0x63)
+
+Optional buffered messages and read-only scalar values, registered with
+`host.Extend(diagnostics)`. Uses the existing CDC transport and framing;
+there is no raw-text stream, second USB initialization, or unsolicited
+traffic. Firmware without this extension answers `UNSUPPORTED`.
+
+The descriptor may advertise:
+
+```json
+"diagnostics": { "version": 1, "logs": true, "values": true }
+```
+
+Hosts probe `DIAG_INFO` even if this key or the descriptor is absent.
+The diagnostics version is independent of the HostLink protocol version.
+An unsupported diagnostics version disables only diagnostics.
+
+### 9.1 History, lifetime, and scheduling
+
+Messages reside in a fixed SRAM ring, default 32 records of up to 160
+UTF-8 bytes each. Overflow evicts the oldest records. Long messages are
+truncated and flagged; a decoder may replace an incomplete UTF-8 suffix.
+Reads never consume history. Cursor retries are safe while records remain
+retained; an expired cursor explicitly reports the gap. No command clears
+history. “Clear view” in a client only clears its captured output.
+
+Record sequence numbers start at 1. A cursor identifies the **next**
+record to read; the reported `next` is one past the newest retained record.
+Before a 32-bit sequence number wraps, firmware starts a new diagnostic
+session and clears the ring. Counters saturate at `UINT32_MAX`.
+
+Session identity needs neither flash writes nor a device RNG: the first
+`DIAG_INFO` supplies a random nonzero 32-bit candidate token, which firmware
+retains until reboot/sequence rollover. Subsequent INFO calls, including
+retries and reconnects, return that retained token and never replace it.
+Clients choose a fresh random candidate for each discovery (reuse it when
+retrying the same request). All other commands carry the observed session;
+a stale or uninitialized session returns `BAD_STATE`. Re-discover with a
+fresh candidate, reset the cursor, and insert a restart marker. The token
+is an epoch marker, not authentication, and has a 1-in-2^32 collision risk.
+
+Times are device uptime in milliseconds modulo 2^32, not host wall time.
+Formatted logging runs in the control loop after hardware initialization;
+records can be collected before the first HostLink poll. `Gauge::Set`
+publishes one lock-free scalar and may run in the audio callback. A values
+response samples gauges independently; it is not an atomic multi-value
+snapshot. Unset or non-finite values should render as unavailable.
+
+Poll at roughly 5 Hz only while viewing/following. Permit at most one
+queued diagnostic poll; skip busy periods rather than accumulate work.
+Preset operations and file transfers have priority. Stop polling before
+DFU, close the existing serial session, and rediscover after reconnect.
+The browser's preset editor and diagnostics share one client and request
+queue. A CLI and browser must not independently own the same serial port.
+
+### 9.2 Commands
+
+All multi-byte fields are little-endian. Every successful response begins
+with `status = OK`. Errors carry just the status byte. Existing HostLink
+`max_body` applies; complete records are packed without splitting them.
+`DIAG_INFO` freezes the value registry for the session: register gauges and
+set their metadata during setup, before the host can query diagnostics.
+
+#### 0x60 DIAG_INFO
+
+Request: `u32 candidate_session` (nonzero).
+
+Response (32 bytes):
+
+```
+u8  status
+u8  version          (1)
+u8  flags            bit0 logs, bit1 values, bit2 configuration error
+u32 session
+u32 oldest           oldest retained sequence, or next if empty
+u32 next             next sequence that will be assigned
+u32 dropped          records evicted since boot
+u32 truncated        messages shortened since boot
+u32 format_errors    formatting failures since boot
+u16 record_capacity
+u16 max_text_bytes
+u8  gauge_count
+```
+
+Configuration error means a gauge registration failed (duplicate ID,
+invalid metadata, full registry, or registration after discovery). Valid
+registered gauges and logs remain available. This state is also exposed by
+`Diagnostics::ConfigurationOk()`. Host extension-registration errors are
+separately exposed by `Host::ConfigurationOk()`.
+
+#### 0x61 DIAG_READ
+
+Request: `u32 session, u32 cursor, u16 max_records` (nonzero).
+Cursor `0` selects the oldest retained record without reporting earlier
+loss; otherwise `cursor > next` is `BAD_ARGS`.
+
+Response:
+
+```
+u8  status
+u32 session
+u32 next_cursor
+u32 lost             records between requested cursor and retained history
+u16 count
+record[count]:
+    u32 sequence
+    u32 time_ms
+    u8  level        0 debug, 1 info, 2 warn, 3 error
+    u8  flags        bit0 truncated
+    u16 text_len
+    u8  text[text_len]  UTF-8, no terminator or added newline
+```
+
+Each response is bounded by `max_body` and `max_records`. Zero records
+means the cursor is at the tail. Client severity filtering must still
+advance the cursor over filtered records. A one-shot CLI read can drain
+through the `next` observed at discovery so continuous firmware output
+cannot prevent it from completing.
+
+#### 0x62 DIAG_DESCRIBE
+
+Request: `u32 session, u8 start_index`.
+Response: `u8 status, u32 session, u8 next_index, u8 count`, followed by:
+
+```
+u8  index
+u8  type            1 f32, 2 i32, 3 u32, 4 bool
+str id              stable, unique, 1–48 bytes
+str label           1–64 bytes
+str unit            0–16 bytes
+```
+
+Strings are length-prefixed UTF-8 byte strings. Indices are contiguous,
+zero-based registration order. Fetch until `next_index == gauge_count`;
+a start beyond that is `BAD_ARGS`. Current firmware supports 16 gauges.
+The registry and metadata must remain unchanged after setup.
+
+#### 0x63 DIAG_VALUES
+
+Request: `u32 session`.
+Response: `u8 status, u32 session, u32 time_ms, u8 count`, followed by:
+
+```
+u8  index
+u8  type
+u8  flags           bit0 has been published at least once
+u32 bits            IEEE-754 f32, two's-complement i32, u32, or bool 0/1
+```
+
+All registered values fit in a minimum-sized frame. Values are read-only
+and independent of preset blobs and schema hashes. Hosts tolerate unknown
+types as unavailable values without losing the console.
+
+### 9.3 A Host without presets
+
+The additive `Host(id, name, fw_version, git_hash)` constructor supports
+identity, reboot, custom descriptors, and extensions without a preset
+store. Its HELLO reports `slot_count = 0`, `boot_slot = 0xFF`, and zero
+schema hash, blob capacity, and live size. The default descriptor is absent.
+`LIST_SLOTS` returns `OK, 0`; preset/live mutation and blob operations return
+`UNSUPPORTED`. Clients skip preset setup when no slots/live state exist,
+and still probe optional extensions. Existing preset-bearing Hosts retain
+their previous wire behavior.
+
+### 9.4 Cross-language fixtures
+
+`tests/host/golden/diagnostics_golden.json` is emitted by the C++ tests:
+
+```sh
+build-host/tests/host/diagnostics_tests_512 --golden > tests/host/golden/diagnostics_golden.json
+node --test tools/hostlink-cli/diagnostics.test.mjs
+```
+
+The programmer's `src/lib/settings-link/__tests__` contains a copy checked
+by its production-client tests. Update both when the protocol changes.
+The CLI codec and programmer's `diagnostics.ts` decode the same vectors.

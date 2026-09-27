@@ -50,3 +50,34 @@ Validates COBS / CRC32 / frame codecs against
 `../../tests/host/golden/hostlink_golden.json` — the same vectors the
 website's TypeScript suite checks, so all three implementations agree on
 the bytes.
+
+
+## Device diagnostics
+
+```sh
+./hostlink.mjs -p <port> logs                  # retained messages, then exit
+./hostlink.mjs -p <port> logs --follow         # continue until Ctrl-C
+./hostlink.mjs -p <port> logs --level warn      # warnings and errors
+./hostlink.mjs -p <port> logs --json           # JSON Lines, including gap notices
+./hostlink.mjs -p <port> watch                 # live typed values
+./hostlink.mjs -p <port> watch --json
+```
+
+Firmware must opt into `hostlink::Diagnostics`; see
+[USB diagnostics](../../docs/diagnostics.md). Close the browser's device
+connection before using the CLI. This is a HostLink client, not a raw text
+terminal. Reads are non-destructive and reconnects can recover retained
+history. A disconnected port ends the command; reconnect with the new
+port name if the OS changed it. In-band diagnostic session resets are
+rediscovered automatically.
+
+Diagnostics codec tests consume the C++ generated wire vectors:
+
+```sh
+node --test tools/hostlink-cli/diagnostics.test.mjs # from SDK root
+```
+
+The transport-neutral `diagnostics-codec.mjs` mirrors the programmer's
+`src/lib/settings-link/diagnostics.ts`; update the codec and shared golden
+fixtures together when changing the protocol. No npm dependencies are
+required to run this CLI.

@@ -77,6 +77,16 @@ class Host : public HostService
     Host(Presets& presets, const char* id, const char* name,
          const char* fw_version, const char* git_hash);
 
+    /** A host without presets: identity, reboot and optional extensions.
+     * No preset buffers or descriptor are initialized. Hosts discover
+     * extension support by probing (e.g. DIAG_INFO). */
+    Host(const char* id, const char* name,
+         const char* fw_version, const char* git_hash);
+
+    /** False after invalid/overlapping/excess/late extension registration.
+     * The valid features keep running; check this after setup/Start(). */
+    bool ConfigurationOk() const { return configuration_ok_; }
+
     /* ── Optional configuration (call before the link starts) ───────── */
 
     /** USB product string (default: the module display name). */
@@ -218,7 +228,7 @@ class Host : public HostService
         if (num_jacks_ < kMaxJacks) jack_ptrs_[num_jacks_++] = &j;
     }
 
-    Presets&    presets_;
+    Presets*    presets_ = nullptr;
     const char* id_;
     const char* name_;
     const char* fw_;
@@ -260,6 +270,7 @@ class Host : public HostService
 
     HostLink* link_        = nullptr;
     bool      started_     = false;
+    bool      configuration_ok_ = true;
     size_t    factory_len_ = 0u;
     alignas(HostLink) uint8_t link_storage_[sizeof(HostLink)];
 };

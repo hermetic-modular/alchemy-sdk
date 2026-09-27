@@ -65,6 +65,12 @@ enum class Cmd : uint8_t
     FsDelete      = 0x59,
     FsMkdir       = 0x5A,
     FsRename      = 0x5B,
+
+    // Optional diagnostics block (protocol §9).
+    DiagInfo      = 0x60,
+    DiagRead      = 0x61,
+    DiagDescribe  = 0x62,
+    DiagValues    = 0x63,
 };
 
 constexpr uint8_t kRespFlag = 0x80u;

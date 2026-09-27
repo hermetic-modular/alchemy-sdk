@@ -24,6 +24,7 @@
  * (Linux) is used.
  */
 
+import { runDiagnostics } from "./diagnostics.mjs";
 import { execFileSync } from "node:child_process";
 import { readdirSync, readFileSync, writeFileSync, openSync, readSync, writeSync, closeSync } from "node:fs";
 
@@ -113,17 +114,22 @@ function buildFrame(type, seq, body) {
 }
 
 class FrameParser {
-  constructor() { this.acc = []; }
+  constructor() { this.acc = []; this.overflow = false; }
   *push(byte) {
-    if (byte !== 0) { this.acc.push(byte); return; }
+    if (byte !== 0) {
+      if (this.acc.length < 2068) this.acc.push(byte);
+      else this.overflow = true;
+      return;
+    }
     const chunk = Buffer.from(this.acc);
-    this.acc = [];
-    if (chunk.length === 0) return;
+    const overflow = this.overflow;
+    this.acc = []; this.overflow = false;
+    if (overflow || chunk.length === 0) return;
     const dec = cobsDecode(chunk);
     if (!dec || dec.length < 10) return;
     const bodyLen = dec.length - 10;
     const ok =
-      dec[0] === PROTO &&
+      bodyLen <= 2048 && dec[0] === PROTO &&
       dec.readUInt16LE(4) === bodyLen &&
       crc32(dec.subarray(0, dec.length - 4)) === dec.readUInt32LE(dec.length - 4);
     yield {
@@ -150,10 +156,10 @@ class SerialLink {
   constructor(port) {
     this.port = port;
     try {
-      execFileSync("stty", ["-f", port, "raw", "-echo", "115200"], { stdio: "ignore" });
+      execFileSync("stty", ["-f", port, "raw", "-echo", "115200", "min", "0", "time", "1"], { stdio: "ignore" });
     } catch {
       // Linux stty uses -F; try that spelling.
-      execFileSync("stty", ["-F", port, "raw", "-echo", "115200"], { stdio: "ignore" });
+      execFileSync("stty", ["-F", port, "raw", "-echo", "115200", "min", "0", "time", "1"], { stdio: "ignore" });
     }
     this.fd = openSync(port, "r+");
     this.parser = new FrameParser();
@@ -167,24 +173,32 @@ class SerialLink {
   request(type, body = Buffer.alloc(0), timeoutMs = 3000) {
     const seq = this.seq;
     this.seq = (this.seq + 1) & 0xffff || 1;
-    writeSync(this.fd, buildFrame(type, seq, body));
+    const frame = buildFrame(type, seq, body);
+    let sent = 0;
+    while (sent < frame.length) {
+      const n = writeSync(this.fd, frame, sent, frame.length - sent);
+      if (!n) throw new Error("Serial write made no progress");
+      sent += n;
+    }
 
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       let n = 0;
-      try { n = readSync(this.fd, this.buf, 0, this.buf.length, null); } catch { n = 0; }
+      try { n = readSync(this.fd, this.buf, 0, this.buf.length, null); }
+      catch (err) { throw new Error(`Serial read failed: ${err.message}`); }
       for (let i = 0; i < n; i++) {
         for (const f of this.parser.push(this.buf[i])) {
-          if (f.seq !== seq) continue;
-          if (f.type === ERR_TYPE) throw new Error(`frame error: ${STATUS[f.body[0]] ?? f.body[0]}`);
+          if (!f.ok || f.seq !== seq) continue;
+          if (f.type === ERR_TYPE) throw Object.assign(new Error(`frame error: ${STATUS[f.body[0]] ?? f.body[0]}`), { status: f.body[0] });
           if (f.type !== (type | RESP_FLAG)) throw new Error(`unexpected type 0x${f.type.toString(16)}`);
+          if (!f.body.length) throw new Error("Empty device response");
           const status = f.body[0];
-          if (status !== 0) throw new Error(`device status: ${STATUS[status] ?? status}`);
+          if (status !== 0) throw Object.assign(new Error(`device status: ${STATUS[status] ?? status}`), { status });
           return f.body;
         }
       }
     }
-    throw new Error(`timeout waiting for response to 0x${type.toString(16)}`);
+    throw Object.assign(new Error(`Timeout waiting for response to 0x${type.toString(16)}. Close any browser or other serial client using this device.`), { code: "timeout" });
   }
 }
 
@@ -319,6 +333,10 @@ function parseArgs(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === "-p" || a === "--port") args.port = argv[++i];
+    else if (a === "--follow") args.follow = true;
+    else if (a === "--json") args.json = true;
+    else if (a === "--level") args.level = argv[++i];
+    else if (a.startsWith("--") && a !== "--help") throw new Error(`Unknown option: ${a}`);
     else args._.push(a);
   }
   return args;
@@ -330,6 +348,9 @@ function usage() {
   hostlink.mjs [-p PORT] <command> [args]
 
 Commands:
+  logs [--follow] [--level LEVEL] [--json]
+                            read firmware messages (debug/info/warn/error)
+  watch [--json]            show live diagnostic values until Ctrl-C
   hello                     print device identity
   descriptor                print descriptor JSON (stdout)
   list                      list slot table
@@ -374,7 +395,7 @@ function selftest() {
   process.exit(fail === 0 ? 0 : 1);
 }
 
-function main() {
+async function main() {
   const args = parseArgs(process.argv.slice(2));
   const cmd = args._[0];
   if (cmd === "selftest") return selftest();
@@ -385,6 +406,10 @@ function main() {
   try {
     const info = hello(link); // always handshake first — establishes maxBody
     switch (cmd) {
+      case "logs":
+      case "watch":
+        await runDiagnostics(link, cmd, args);
+        break;
       case "hello":
         console.log(JSON.stringify(info, null, 2));
         break;
@@ -450,4 +475,4 @@ function main() {
   }
 }
 
-main();
+main().catch((err) => { console.error(err.message); process.exitCode = 1; });

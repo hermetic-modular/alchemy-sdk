@@ -14,10 +14,13 @@ namespace hostlink {
 HostLink::HostLink(IHostTransport& transport, Presets& presets,
                    const Info& info,
                    uint8_t* staging, uint8_t* snapshot, size_t buf_cap)
-    : transport_(transport), presets_(presets), info_(info),
+    : transport_(transport), presets_(&presets), info_(info),
       staging_(staging), buf_cap_(buf_cap), snapshot_(snapshot)
 {
 }
+
+HostLink::HostLink(IHostTransport& transport, const Info& info)
+    : transport_(transport), info_(info) {}
 
 /** Largest payload this link accepts/serves in one blob. */
 static inline uint32_t CapOf(size_t buf_cap)
@@ -120,6 +123,18 @@ void HostLink::Poll(uint32_t now_ms)
 
 void HostLink::Handle(const ParsedFrame& f, uint32_t now_ms)
 {
+    if (!presets_)
+    {
+        switch (static_cast<Cmd>(f.type))
+        {
+            case Cmd::ReadSlot: case Cmd::BlobBegin: case Cmd::BlobData:
+            case Cmd::BlobCommit: case Cmd::EraseSlot: case Cmd::GetLive:
+            case Cmd::SaveToSlot: case Cmd::LoadFromSlot:
+                RespondStatus(f, Status::Unsupported);
+                return;
+            default: break;
+        }
+    }
     switch (static_cast<Cmd>(f.type))
     {
         case Cmd::Hello:         OnHello(f);              break;
@@ -165,15 +180,15 @@ void HostLink::OnHello(const ParsedFrame& f)
     w.U8(static_cast<uint8_t>(Status::Ok));
     w.U8(kProtoVersion);
     w.U8(info_.board);
-    w.U8(Presets::kNumSlots);
-    w.U8(info_.boot_slot);
+    w.U8(presets_ ? Presets::kNumSlots : 0u);
+    w.U8(presets_ ? info_.boot_slot : 0xFFu);
     w.Bytes(uid_, 12u);
-    w.U32(presets_.LiveSchemaHash());
+    w.U32(presets_ ? presets_->LiveSchemaHash() : 0u);
     w.U32(CapOf(buf_cap_));
     w.U32(desc_len_);
     w.U32(desc_crc_);
     w.U16(kMaxBody);
-    w.U16(static_cast<uint16_t>(presets_.LiveSize()));
+    w.U16(presets_ ? static_cast<uint16_t>(presets_->LiveSize()) : 0u);
     w.Str(info_.module_id);
     w.Str(info_.module_name);
     w.Str(info_.fw_version);
@@ -214,10 +229,10 @@ void HostLink::OnListSlots(const ParsedFrame& f)
     FrameWriter w(dec_);
     w.Begin(f.type | kRespFlag, f.seq);
     w.U8(static_cast<uint8_t>(Status::Ok));
-    w.U8(Presets::kNumSlots);
-    for (uint8_t s = 0u; s < Presets::kNumSlots; s++)
+    w.U8(presets_ ? Presets::kNumSlots : 0u);
+    for (uint8_t s = 0u; presets_ && s < Presets::kNumSlots; s++)
     {
-        const Presets::SlotInfo info = presets_.InfoFor(s);
+        const Presets::SlotInfo info = presets_->InfoFor(s);
         uint8_t flags = 0u;
         if (info.valid)        flags |= 0x01u;
         if (info.schema_match) flags |= 0x02u;
@@ -247,7 +262,7 @@ void HostLink::OnReadSlot(const ParsedFrame& f)
     uint16_t total  = 0u;
     uint8_t  chunk[kChunkMax];
     const int32_t n =
-        presets_.ReadSlotBytes(slot, offset, chunk, max_len, &schema, &total);
+        presets_->ReadSlotBytes(slot, offset, chunk, max_len, &schema, &total);
     if (n < 0) { RespondStatus(f, Status::BadSlot); return; }
 
     FrameWriter w(dec_);
@@ -285,8 +300,8 @@ void HostLink::OnBlobBegin(const ParsedFrame& f, uint32_t now_ms)
     }
     /* Strict: only blobs the running firmware itself could have produced
      * are accepted; migration is the host's job (see protocol §6). */
-    if (schema != presets_.LiveSchemaHash()
-        || total != presets_.LiveSize())
+    if (schema != presets_->LiveSchemaHash()
+        || total != presets_->LiveSize())
     {
         RespondStatus(f, Status::SchemaMismatch);
         return;
@@ -357,14 +372,14 @@ void HostLink::OnBlobCommit(const ParsedFrame& f)
     {
         /* The on-device load path minus flash: components re-arm their
          * pot catches on the next frame, exactly like a panel load. */
-        if (!presets_.DeserializeLive(staging_, stage_total_))
+        if (!presets_->DeserializeLive(staging_, stage_total_))
             result = Status::BadArgs;
     }
     else
     {
         /* Same wear-levelled, yield-serviced path as a panel save.  This
          * blocks for the flash duration; the response goes out after. */
-        if (!presets_.WriteSlotRaw(stage_target_, stage_schema_,
+        if (!presets_->WriteSlotRaw(stage_target_, stage_schema_,
                                    staging_,
                                    static_cast<uint16_t>(stage_total_)))
             result = Status::FlashFail;
@@ -379,7 +394,7 @@ void HostLink::OnEraseSlot(const ParsedFrame& f)
     const uint8_t slot = f.body[0];
     if (slot >= Presets::kNumSlots) { RespondStatus(f, Status::BadSlot); return; }
 
-    RespondStatus(f, presets_.EraseSlot(slot) ? Status::Ok
+    RespondStatus(f, presets_->EraseSlot(slot) ? Status::Ok
                                               : Status::FlashFail);
 }
 
@@ -393,7 +408,7 @@ void HostLink::OnGetLive(const ParsedFrame& f)
     if (offset == 0u)
     {
         /* Fresh snapshot so multi-chunk reads stay self-consistent. */
-        const size_t n = presets_.SerializeLive(snapshot_, buf_cap_);
+        const size_t n = presets_->SerializeLive(snapshot_, buf_cap_);
         snap_len_   = static_cast<uint16_t>(n);
         snap_valid_ = (n > 0u);
     }
@@ -416,7 +431,7 @@ void HostLink::OnGetLive(const ParsedFrame& f)
     w.U32(offset);
     w.U16(n);
     w.U16(snap_len_);
-    w.U32(presets_.LiveSchemaHash());
+    w.U32(presets_->LiveSchemaHash());
     if (n > 0u) w.Bytes(snapshot_ + offset, n);
     Send(w);
 }
@@ -427,7 +442,7 @@ void HostLink::OnSaveToSlot(const ParsedFrame& f)
     const uint8_t slot = f.body[0];
     if (slot >= Presets::kNumSlots) { RespondStatus(f, Status::BadSlot); return; }
 
-    RespondStatus(f, presets_.Save(slot) ? Status::Ok : Status::FlashFail);
+    RespondStatus(f, presets_->Save(slot) ? Status::Ok : Status::FlashFail);
 }
 
 void HostLink::OnLoadFromSlot(const ParsedFrame& f)
@@ -436,7 +451,7 @@ void HostLink::OnLoadFromSlot(const ParsedFrame& f)
     const uint8_t slot = f.body[0];
     if (slot >= Presets::kNumSlots) { RespondStatus(f, Status::BadSlot); return; }
 
-    RespondStatus(f, (presets_.HasValid(slot) && presets_.Load(slot))
+    RespondStatus(f, (presets_->HasValid(slot) && presets_->Load(slot))
                          ? Status::Ok
                          : Status::BadSlot);
 }

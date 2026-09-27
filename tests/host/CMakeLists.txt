@@ -16,6 +16,7 @@ set(SDK_ROOT "${CMAKE_SOURCE_DIR}")
 
 add_executable(hostlink_tests
     hostlink_tests.cpp
+    "${SDK_ROOT}/framework/src/host_link/diagnostics.cpp"
     button_tests.cpp
     fs_tests.cpp
     pager_nav_tests.cpp
@@ -59,3 +60,14 @@ target_compile_definitions(hostlink_tests PRIVATE ALCHEMY_HOSTLINK_MAX_BODY=2048
 target_link_libraries(hostlink_tests PRIVATE alchemy::primitives)
 
 add_test(NAME hostlink COMMAND hostlink_tests)
+
+# Diagnostics must work at both the default and storage-module frame sizes.
+foreach(BODY_SIZE IN ITEMS 512 2048)
+    add_executable(diagnostics_tests_${BODY_SIZE}
+        diagnostics_tests.cpp
+        "${SDK_ROOT}/framework/src/host_link/diagnostics.cpp")
+    target_compile_definitions(diagnostics_tests_${BODY_SIZE} PRIVATE
+        ALCHEMY_HOSTLINK_MAX_BODY=${BODY_SIZE})
+    target_link_libraries(diagnostics_tests_${BODY_SIZE} PRIVATE alchemy::primitives)
+    add_test(NAME diagnostics_${BODY_SIZE} COMMAND diagnostics_tests_${BODY_SIZE})
+endforeach()

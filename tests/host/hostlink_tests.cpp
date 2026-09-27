@@ -26,6 +26,7 @@
 #include "alchemy/host_link/frame.h"
 #include "alchemy/host_link/json_check.h"
 #include "alchemy/host_link/host_link.h"
+#include "alchemy/host_link/diagnostics.h"
 #include "alchemy/host_link/wire.h"
 #include "alchemy/hw/alchemy_lab.h"
 #include "alchemy/surface/page.h"
@@ -2104,6 +2105,46 @@ static void TestPagerGoToPage()
     CHECK_EQ(pager.Page(), uint8_t{1});
 }
 
+static void TestDiagnosticsIntegration()
+{
+    Fixture fx;
+    Diagnostics debug;
+    debug.Info("Early boot");
+    CHECK(fx.link.Extend(debug));
+    CHECK(!fx.link.Extend(debug)); // duplicate command block is rejected
+    auto info = Transact(fx, Cmd::DiagInfo, U32Body(42));
+    CHECK(info.ok && info.body.size() == 32);
+    CHECK_EQ(RdU32(info.body.data() + 3), 42u);
+    auto slots = Transact(fx, Cmd::ListSlots, {});
+    CHECK(slots.ok && slots.body[1] == Presets::kNumSlots);
+    TestSetLive(fx); // diagnostics never consumes preset staging storage
+    TestGetLive(fx);
+
+    LoopTransport transport;
+    HostLink bare(transport, HostLink::Info{"diag", "Diagnostics", "1", "test", "test", 2, 0});
+    CHECK(bare.Extend(debug));
+    auto call = [&](Cmd cmd) {
+        uint8_t dec[kMaxDecoded], wire[kMaxWire];
+        FrameWriter w(dec); w.Begin(uint8_t(cmd), 99);
+        const size_t n = w.Encode(wire);
+        transport.Inject(wire, n); transport.tx.clear(); bare.Poll(0);
+        FrameParser parser; ParsedFrame f{}; std::vector<uint8_t> body;
+        for (auto b : transport.tx) if (parser.Push(b, f)) {
+            CHECK(f.ok); body.assign(f.body, f.body + f.len);
+        }
+        CHECK(!body.empty());
+        return body;
+    };
+    auto hello = call(Cmd::Hello);
+    CHECK_EQ(hello[3], 0u); CHECK_EQ(hello[4], 255u);
+    CHECK_EQ(RdU32(hello.data() + 17), 0u);
+    CHECK_EQ(RdU16(hello.data() + 35), 0u);
+    CHECK(call(Cmd::ListSlots) == std::vector<uint8_t>({0, 0}));
+    for (auto cmd : {Cmd::ReadSlot, Cmd::BlobBegin, Cmd::BlobData, Cmd::BlobCommit,
+                     Cmd::EraseSlot, Cmd::GetLive, Cmd::SaveToSlot, Cmd::LoadFromSlot})
+        CHECK_EQ(call(cmd)[0], uint8_t(Status::Unsupported));
+}
+
 /* ── Main ──────────────────────────────────────────────────────────── */
 
 int main(int argc, char** argv)
@@ -2111,6 +2152,7 @@ int main(int argc, char** argv)
     if (argc == 3 && std::string(argv[1]) == "--emit-golden")
         return EmitGolden(argv[2]);
 
+    TestDiagnosticsIntegration();
     TestCrc32();
     TestCobs();
     TestFrameRoundtrip();
