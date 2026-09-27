@@ -156,3 +156,23 @@ target_include_directories(alchemy_storage PUBLIC
 target_link_libraries(alchemy_storage PUBLIC daisy)
 
 endif()
+
+# ── alchemy::firmware_picker (firmware — cross-compile only) ───────────────
+# A Settings page that changes firmware from the SD card: lists /alchemy
+# (FirmwareCatalog, in alchemy::storage) and writes the chosen image into
+# the bootloader's app slot.  Needs a Settings surface and the board's
+# QSPI, so it sits on top of both storage and surface.
+
+if(CMAKE_CROSSCOMPILING)
+
+add_library(alchemy_firmware_picker STATIC
+    src/storage/firmware_picker.cpp
+)
+add_library(alchemy::firmware_picker ALIAS alchemy_firmware_picker)
+
+target_link_libraries(alchemy_firmware_picker PUBLIC
+    alchemy::storage
+    alchemy::surface
+)
+
+endif()
