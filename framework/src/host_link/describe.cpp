@@ -132,8 +132,10 @@ const VirtualKnob* FindKnob(const PageSet* pages, uint8_t pg, uint8_t pot)
 /* Derive a display hint from the knob's declared value transform:
  *   Exp(lo, hi)        → {"kind":"exp","lo":..,"hi":..[,"unit":".."]}
  *   Linear(lo, hi)     → {"kind":"linear",...} (plain 0..1 → percent)
- *   Selector + Labels  → {"kind":"snap","labels":[...]}
- *   Selector unlabeled → {"kind":"linear","lo":0,"hi":zones-1}
+ *   Selector + Labels  → {"kind":"snap","labels":[...],"bins":N}
+ *   Selector unlabeled → {"kind":"linear","lo":0,"hi":N-1,"bins":N}
+ * "bins" is additive: floor(norm*N), clamped to [0,N-1], with writes at
+ * (index+0.5)/N. Without it, legacy snap positions remain i/(N-1).
  * A raw .Disp(json) wins outright.  Returns nullptr for the plain
  * percent readout (and on buffer overflow — a safe degrade). */
 const char* DeriveKnobDisp(const VirtualKnob& k, char* buf, size_t cap)
@@ -154,6 +156,7 @@ const char* DeriveKnobDisp(const VirtualKnob& k, char* buf, size_t cap)
                 jw.BeginArr();
                 for (uint8_t i = 0; i < zones; i++) jw.Str(k.Labels()[i]);
                 jw.EndArr();
+                jw.Key("bins"); jw.UInt(zones);
                 jw.EndObj();
             }
             else
@@ -162,6 +165,7 @@ const char* DeriveKnobDisp(const VirtualKnob& k, char* buf, size_t cap)
                 jw.Key("kind"); jw.Str("linear");
                 jw.Key("lo");   jw.Float(0.f);
                 jw.Key("hi");   jw.Float(zones > 0u ? zones - 1.f : 0.f);
+                jw.Key("bins"); jw.UInt(zones);
                 jw.EndObj();
             }
             break;
@@ -221,7 +225,7 @@ bool DescribePager(DescriptorBuilder& db, const Pager& pager,
             const VirtualKnob* k = FindKnob(pages, pg, pot);
             if (k && k->SeeOverflowed()) return false;
 
-            char idbuf[16], namebuf[16], dispbuf[192];
+            char idbuf[16], namebuf[16], dispbuf[256];
             const char* fid = (k && k->Ident()) ? k->Ident() : idbuf;
             if (fid == idbuf)
                 std::snprintf(idbuf, sizeof idbuf, "p%u.%u", pg, pot);

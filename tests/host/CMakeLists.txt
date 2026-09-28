@@ -17,6 +17,7 @@ set(SDK_ROOT "${CMAKE_SOURCE_DIR}")
 add_executable(hostlink_tests
     hostlink_tests.cpp
     button_tests.cpp
+    selector_tests.cpp
     fs_tests.cpp
     pager_nav_tests.cpp
     param_lock_tests.cpp

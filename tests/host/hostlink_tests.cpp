@@ -41,6 +41,7 @@
 #include "alchemy/surface/virtual_knob.h"
 
 #include "button_tests.h"
+#include "selector_tests.h"
 #include "fs_tests.h"
 #include "pager_nav_tests.h"
 #include "param_lock_tests.h"
@@ -1107,7 +1108,7 @@ static void TestAutoDescribe()
     CHECK(json.find("{\"kind\":\"linear\",\"lo\":0,\"hi\":24,\"unit\":\"dB\"}")
           != std::string::npos);
     CHECK(json.find("{\"kind\":\"snap\",\"labels\":[\"Digi\",\"BBD\",\"Tape\","
-                    "\"Vinyl\"]}")
+                    "\"Vinyl\"],\"bins\":4}")
           != std::string::npos);
     /* Positional id for the un-Ident()ed knob; raw .Disp() passthrough. */
     CHECK(json.find("\"id\":\"p0.1\",\"name\":\"Drive\"") != std::string::npos);
@@ -1158,6 +1159,64 @@ static bool IsErrorDescriptor(const char* buf, uint32_t len)
     const std::string j(buf, len);
     return j.find("\"error\":") != std::string::npos
         && j.find("\"components\":[]") != std::string::npos;
+}
+
+static void TestSelectorDisplayHints()
+{
+    SurfaceFixture sf;
+    const auto hash = sf.presets.LiveSchemaHash();
+    std::vector<uint8_t> before(sf.presets.LiveSize());
+    CHECK(sf.presets.SerializeLive(before.data(), before.size()) == before.size());
+
+    static const char* labels[] = {"A", "B", "C", "D", "E", "F", "G", "H"};
+    static const char* legacy = "{\"kind\":\"snap\",\"labels\":[\"Low\",\"High\"]}";
+    VirtualKnob labelled = VirtualKnob(0, "Labelled").Selector(8).Labels(labels, 8);
+    VirtualKnob numeric = VirtualKnob(1, "Numeric").Selector(8);
+    VirtualKnob custom = VirtualKnob(2, "Custom").Selector(8).Disp(legacy);
+    VirtualKnob single = VirtualKnob(3, "Single").Selector(0);
+    Page page(0);
+    page.Knobs(labelled, numeric, custom, single);
+    const Page* refs[] = {&page};
+    const PageSet pages{refs, 1};
+
+    char buf[16384];
+    const auto len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                     sf.presets, &pages, nullptr, 0);
+    CHECK(len > 0 && ValidJsonValue(buf, len));
+    const std::string json(buf, len);
+    CHECK(json.find("\"disp\":{\"kind\":\"snap\",\"labels\":[\"A\",\"B\",\"C\",\"D\","
+                    "\"E\",\"F\",\"G\",\"H\"],\"bins\":8}") != std::string::npos);
+    CHECK(json.find("\"disp\":{\"kind\":\"linear\",\"lo\":0,\"hi\":7,\"bins\":8}")
+          != std::string::npos);
+    CHECK(json.find("\"disp\":{\"kind\":\"linear\",\"lo\":0,\"hi\":0,\"bins\":1}")
+          != std::string::npos);
+    CHECK(json.find(std::string("\"disp\":") + legacy) != std::string::npos);
+    for (uint8_t pot = 0; pot < 4u; ++pot)
+    {
+        const auto start = json.find("\"id\":\"p0." + std::to_string(pot) + "\"");
+        CHECK(start != std::string::npos);
+        if (start == std::string::npos) continue;
+        const auto field = json.substr(start, json.find("\"disp\":", start) - start);
+        CHECK(field.find("\"type\":\"f32\"") != std::string::npos);
+        CHECK(field.find("\"off\":" + std::to_string(pot * 4u) + ",") != std::string::npos);
+    }
+    CHECK(sf.presets.LiveSchemaHash() == hash);
+    CHECK(sf.presets.LiveSize() == before.size());
+    std::vector<uint8_t> after(before.size());
+    CHECK(sf.presets.SerializeLive(after.data(), after.size()) == after.size());
+    CHECK(after == before);
+
+    // Labels that fitted before must not disappear just because bins was added.
+    static const char* long_labels[] = {
+        "Long selectorzone 00", "Long selectorzone 01", "Long selectorzone 02",
+        "Long selectorzone 03", "Long selectorzone 04", "Long selectorzone 05",
+        "Long selectorzone 06"};
+    labelled.Selector(7).Labels(long_labels, 7);
+    const auto long_len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                          sf.presets, &pages, nullptr, 0);
+    CHECK(long_len > 0 && ValidJsonValue(buf, long_len));
+    const std::string long_json(buf, long_len);
+    CHECK(long_json.find("Long selectorzone 06\"],\"bins\":7}") != std::string::npos);
 }
 
 static void TestAutoDescribeGenericAndOverrides()
@@ -2130,6 +2189,7 @@ int main(int argc, char** argv)
     TestSettingsGesturesEmission();
     TestSettingsUseLocksDescriptor();
     TestAutoDescribe();
+    TestSelectorDisplayHints();
     TestAutoDescribeGenericAndOverrides();
     TestManualEmission();
     TestManualValidation();
@@ -2145,6 +2205,7 @@ int main(int argc, char** argv)
 
     RunParamLockTests(g_checks, g_failures);
     RunButtonTests(g_checks, g_failures);
+    RunSelectorTests(g_checks, g_failures);
     RunPagerNavTests(g_checks, g_failures);
     RunFsTests(g_checks, g_failures);
 

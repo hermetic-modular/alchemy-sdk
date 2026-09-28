@@ -4,6 +4,7 @@
  */
 
 #include "alchemy/led/perf_renderer.h"
+#include "alchemy/control/selector.h"
 #include "alchemy/led/animations.h"
 #include "alchemy/led/ring_frame.h"
 #include "alchemy/led/panel.h"
@@ -67,7 +68,13 @@ void PerfRenderer::Render(LedPanel&        dst,
                 SelectorDesc sel   = slot.selector;
                 sel.active_color   = LedPanel::Scale(sel.active_color,   fill_k);
                 sel.inactive_color = LedPanel::Scale(sel.inactive_color, fill_k);
-                f.Base(sel, cv);
+                if (slot.selector_value_zones)
+                {
+                    sel.num_zones = slot.selector_value_zones;
+                    f.BaseZone(sel, SelectorIndex(cv, sel.num_zones));
+                }
+                else
+                    f.Base(sel, cv);
                 break;
             }
 
