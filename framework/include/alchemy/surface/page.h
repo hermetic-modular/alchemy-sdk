@@ -118,6 +118,17 @@ class Page
     /** Manual prose for this page (markdown; descriptor-only). */
     Page& Help(const char* md) { help_ = md; return *this; }
 
+    Page& HidePot(uint8_t pot, bool hidden = true)
+    {
+        if (pot < kMaxKnobs)
+        {
+            const auto bit = static_cast<uint8_t>(1u << pot);
+            if (hidden) hidden_pots_ |= bit;
+            else        hidden_pots_ &= static_cast<uint8_t>(~bit);
+        }
+        return *this;
+    }
+
     /* ── Read accessors ───────────────────────────────────────────────── */
 
     uint8_t      Index() const { return idx_; }
@@ -134,6 +145,10 @@ class Page
     const char*  TabName () const { return name_; }
     const char*  TabColor() const { return color_; }
     const char*  HelpText() const { return help_; }
+    bool PotHidden(uint8_t pot) const
+    {
+        return pot < kMaxKnobs && (hidden_pots_ & (1u << pot)) != 0u;
+    }
 
   private:
     uint8_t      idx_;
@@ -145,6 +160,7 @@ class Page
 
     VirtualButton* buttons_[kMaxButtons] = {};
     uint8_t        num_buttons_          = 0;
+    uint8_t        hidden_pots_          = 0u;
 };
 
 } // namespace alchemy

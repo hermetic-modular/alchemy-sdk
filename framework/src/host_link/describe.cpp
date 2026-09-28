@@ -129,6 +129,19 @@ const VirtualKnob* FindKnob(const PageSet* pages, uint8_t pg, uint8_t pot)
     return nullptr;
 }
 
+/* Visibility belongs to the page position, independent of whether a
+ * VirtualKnob was declared there (or shared with another page). */
+bool IsPotHidden(const PageSet* pages, uint8_t pg, uint8_t pot)
+{
+    if (!pages) return false;
+    for (uint8_t i = 0; i < pages->count; i++)
+    {
+        const Page* p = pages->pages[i];
+        if (p && p->Index() == pg && p->PotHidden(pot)) return true;
+    }
+    return false;
+}
+
 /* Derive a display hint from the knob's declared value transform:
  *   Exp(lo, hi)        → {"kind":"exp","lo":..,"hi":..[,"unit":".."]}
  *   Linear(lo, hi)     → {"kind":"linear",...} (plain 0..1 → percent)
@@ -236,7 +249,8 @@ bool DescribePager(DescriptorBuilder& db, const Pager& pager,
             ok = db.PagerField(pg, pot, fid, nm, disp,
                                k ? k->ManualHelp() : nullptr,
                                k ? k->SeeRefs()    : nullptr,
-                               k ? k->NumSeeRefs() : 0u);
+                               k ? k->NumSeeRefs() : 0u,
+                               IsPotHidden(pages, pg, pot));
         }
     }
     return ok && db.EndPager();

@@ -285,7 +285,8 @@ bool DescriptorBuilder::PagerField(uint8_t page, uint8_t pot,
                                    const char* field_id, const char* name,
                                    const char* disp_json,
                                    const char* help,
-                                   const SeeRef* see, uint8_t num_see)
+                                   const SeeRef* see, uint8_t num_see,
+                                   bool hidden)
 {
     if (!pager_ || !fields_open_) return Fail("pager: field before BeginPager");
     if (page >= pager_->NumPages() || pot >= pager_->NumPots())
@@ -310,6 +311,7 @@ bool DescriptorBuilder::PagerField(uint8_t page, uint8_t pot,
     if (disp_json) w_.RawValue(disp_json);
     else           w_.RawValue("{\"kind\":\"norm\"}");
     if (!EmitHelpSee(help, see, num_see)) return false;
+    if (hidden) { w_.Key("hidden"); w_.Bool(true); }
     w_.EndObj();
     return !error_;
 }

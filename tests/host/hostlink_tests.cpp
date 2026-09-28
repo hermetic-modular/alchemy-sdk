@@ -1365,6 +1365,136 @@ static void TestManualValidation()
     }
 }
 
+static void TestManualCapacity()
+{
+    RamFlash flash;
+    Presets presets{g_dummy_qspi};
+    Pager pager(1, 1);
+    presets.Manage(pager);
+    presets.Init(flash.Ops(), flash.Base());
+
+    Manual manual;
+    char ids[17][12];
+    char buf[8192];
+    for (uint8_t i = 0; i < 17u; ++i)
+    {
+        std::snprintf(ids[i], sizeof ids[i], "section-%u", i);
+        manual.Section(ids[i], "Title", "Body");
+        const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+            presets, nullptr, nullptr, 0, nullptr, 0, nullptr, 0,
+            nullptr, 0, &manual);
+        if (i < 16u)
+        {
+            CHECK(!manual.Overflowed());
+            CHECK_EQ(manual.NumSections(), i + 1u);
+            CHECK(len > 0u && ValidJsonValue(buf, len));
+            CHECK(!IsErrorDescriptor(buf, len));
+            const std::string json(buf, len);
+            for (uint8_t j = 0; j <= i; ++j)
+                CHECK(json.find(std::string("\"id\":\"") + ids[j] + "\"")
+                      != std::string::npos);
+        }
+        else
+        {
+            CHECK(manual.Overflowed());
+            CHECK_EQ(manual.NumSections(), 16u);
+            CHECK(IsErrorDescriptor(buf, len));
+            CHECK(std::string(buf, len).find("manual: too many sections")
+                  != std::string::npos);
+        }
+
+        if (i == 15u)
+        {
+            // Section capacity does not relax the descriptor's byte limit.
+            char small[512];
+            const uint32_t n = RenderDescriptor(small, sizeof small, kAutoInfo,
+                presets, nullptr, nullptr, 0, nullptr, 0, nullptr, 0,
+                nullptr, 0, &manual);
+            CHECK(IsErrorDescriptor(small, n));
+            CHECK(std::string(small, n).find("descriptor buffer overflow")
+                  != std::string::npos);
+        }
+    }
+}
+
+static void TestPagerVisibility()
+{
+    RamFlash flash;
+    Presets presets{g_dummy_qspi};
+    Pager pager(2, 4);
+    const float phys[4] = {};
+    for (uint8_t pg = 0; pg < 2u; ++pg)
+        for (uint8_t p = 0; p < 4u; ++p)
+            pager.SetStored(pg, p, (pg * 4u + p) / 8.0f, phys);
+    presets.Manage(pager);
+    presets.Init(flash.Ops(), flash.Base());
+
+    VirtualKnob shared(0, "Shared");
+    VirtualKnob active = VirtualKnob(1, "Active").SeeAlso("spare");
+    VirtualKnob spare = VirtualKnob(2, "Unused").Ident("spare");
+    Page p0 = Page(0).Knobs(shared);
+    Page p1 = Page(1).Knobs(shared, active, spare);
+    Page outside = Page(7).HidePot(1);
+    const Page* refs[] = {nullptr, &p1, &outside, &p0};
+    const PageSet pages{refs, 4};
+
+    auto render = [&]() {
+        char buf[8192];
+        const uint32_t len = RenderDescriptor(buf, sizeof buf, kAutoInfo,
+                                              presets, &pages, nullptr, 0);
+        CHECK(len > 0u && ValidJsonValue(buf, len));
+        CHECK(!IsErrorDescriptor(buf, len));
+        return std::string(buf, len);
+    };
+    const std::string before = render();
+    CHECK(before.find("\"hidden\"") == std::string::npos);
+    const auto hash = presets.LiveSchemaHash();
+    uint8_t saved[32], after[32];
+    CHECK_EQ(presets.SerializeLive(saved, sizeof saved), sizeof saved);
+
+    // Shared, explicitly declared, and undeclared positions can all hide.
+    p1.HidePot(0).HidePot(2).HidePot(3).HidePot(255);
+    CHECK(!p1.PotHidden(255));
+    CHECK(!p1.PotHidden(1));
+    p1.HidePot(7);
+    CHECK(p1.PotHidden(7));
+    p1.HidePot(7, false);
+    CHECK(!p1.PotHidden(7));
+    std::string hidden = render();
+    for (uint8_t pg = 0; pg < 2u; ++pg)
+        for (uint8_t p = 0; p < 4u; ++p)
+        {
+            char position[32];
+            std::snprintf(position, sizeof position, "\"page\":%u,\"pot\":%u,", pg, p);
+            const size_t start = hidden.find(position);
+            CHECK(start != std::string::npos);
+            if (start == std::string::npos) continue;
+            const size_t end = hidden.find("{\"id\":", start);
+            const bool is_hidden = hidden.substr(start, end - start)
+                                       .find("\"hidden\":true") != std::string::npos;
+            CHECK(is_hidden == (pg == 1u && p != 1u));
+        }
+    // Removing just the new hints recovers the full original descriptor:
+    // same ids, offsets, defaults, types, references, and schema hash.
+    const std::string hint = ",\"hidden\":true";
+    for (size_t pos; (pos = hidden.find(hint)) != std::string::npos;)
+        hidden.erase(pos, hint.size());
+    CHECK(hidden == before);
+    CHECK_EQ(presets.LiveSchemaHash(), hash);
+    CHECK_EQ(presets.LiveSize(), sizeof saved);
+    CHECK_EQ(presets.SerializeLive(after, sizeof after), sizeof after);
+    CHECK(std::memcmp(saved, after, sizeof saved) == 0);
+
+    // Old preset bytes still restore the hidden slots exactly.
+    pager.SetStored(1, 2, 0.1f, phys);
+    CHECK(presets.DeserializeLive(saved, sizeof saved));
+    CHECK_EQ(presets.SerializeLive(after, sizeof after), sizeof after);
+    CHECK(std::memcmp(saved, after, sizeof saved) == 0);
+    p1.HidePot(0, false).HidePot(2, false).HidePot(3, false);
+    CHECK(render() == before);
+}
+
+
 static void TestManualHashStability()
 {
     SurfaceFixture sf;
@@ -2189,6 +2319,8 @@ int main(int argc, char** argv)
     TestManualEmission();
     TestManualValidation();
     TestManualHashStability();
+    TestManualCapacity();
+    TestPagerVisibility();
     TestFactoryDefaultsImage();
     TestButtonsEmission();
     TestRootButtonGestures();
