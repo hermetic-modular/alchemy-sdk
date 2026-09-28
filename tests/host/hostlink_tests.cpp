@@ -428,6 +428,56 @@ static void TestDescriptorChunks(Fixture& fx)
     fx.link.SetDescriptor(nullptr, 0);
 }
 
+static void TestDescriptorReplacement()
+{
+    Fixture fx;
+    const std::string old_desc(3000, 'a');
+    const std::string new_desc(3000, 'b'); // same length, different CRC
+    fx.link.SetDescriptor(old_desc.data(), old_desc.size());
+    auto read = [&](uint32_t off) {
+        std::vector<uint8_t> req(6);
+        WrU32(req.data(), off);
+        WrU16(req.data() + 4, 1000u);
+        return Transact(fx, Cmd::GetDescriptor, req);
+    };
+    // Initial/static descriptors preserve arbitrary offset reads.
+    CHECK_EQ(read(1000).body[0], uint8_t(Status::Ok));
+    const Resp first = read(0);
+    CHECK_EQ(first.body[0], uint8_t(Status::Ok));
+    CHECK_EQ(RdU16(first.body.data() + 5), 1000u);
+    CHECK(std::memcmp(first.body.data() + 7, old_desc.data(), 1000) == 0);
+
+    fx.link.SetDescriptor(new_desc.data(), new_desc.size());
+    // HELLO reveals the new version but must not revive an old read.
+    const Resp hello = Transact(fx, Cmd::Hello, {});
+    CHECK_EQ(RdU32(hello.body.data() + 25), new_desc.size());
+    CHECK_EQ(RdU32(hello.body.data() + 29),
+             Crc32(reinterpret_cast<const uint8_t*>(new_desc.data()), new_desc.size()));
+    CHECK_EQ(read(1000).body[0], uint8_t(Status::BadState));
+    CHECK_EQ(read(2000).body[0], uint8_t(Status::BadState));
+
+    std::string got;
+    for (uint32_t off = 0; off < new_desc.size(); off += 1000u)
+    {
+        const Resp r = read(off);
+        CHECK_EQ(r.body[0], uint8_t(Status::Ok));
+        if (r.body.size() < 7u) break;
+        got.append(reinterpret_cast<const char*>(r.body.data() + 7),
+                   RdU16(r.body.data() + 5));
+    }
+    CHECK(got == new_desc);
+    // A repeated chunk is safe until another publication.
+    CHECK_EQ(read(1000).body[0], uint8_t(Status::Ok));
+
+    const std::string shorter(100, 'c');
+    fx.link.SetDescriptor(shorter.data(), shorter.size());
+    CHECK_EQ(read(2000).body[0], uint8_t(Status::BadState));
+    CHECK_EQ(RdU16(read(0).body.data() + 5), shorter.size());
+    fx.link.SetDescriptor(nullptr, 0);
+    CHECK_EQ(read(100).body[0], uint8_t(Status::BadState));
+    CHECK_EQ(RdU16(read(0).body.data() + 5), 0u);
+}
+
 static std::vector<uint8_t> LiveBytes(Fixture& fx)
 {
     std::vector<uint8_t> out(fx.presets.LiveSize());
@@ -1405,6 +1455,38 @@ static void TestManualHashStability()
 /* Ordering independence: defs decode from a factory image captured
  * before any preset load, so a render taken after a load is
  * byte-identical to one taken at factory state. */
+static void TestDescriptorBuildResult()
+{
+    SurfaceFixture sf;
+    char buf[16384];
+    bool succeeded = false;
+    auto render = [&](char* out, size_t cap, const PageSet* pages = nullptr) {
+        return RenderDescriptor(out, cap, kAutoInfo, sf.presets, pages,
+            nullptr, 0, nullptr, 0, nullptr, 0, nullptr, 0, nullptr,
+            nullptr, 0, &succeeded);
+    };
+    const uint32_t good = render(buf, sizeof buf);
+    CHECK(succeeded && good > 0u);
+    CHECK(!IsErrorDescriptor(buf, good));
+    VirtualKnob knob = VirtualKnob(0, "Invalid").SeeAlso("missing-id");
+    Page page = Page(0).Knobs(knob);
+    const Page* refs[] = {&page};
+    const PageSet pages{refs, 1};
+    const uint32_t bad = render(buf, sizeof buf, &pages);
+    CHECK(bad > 0u); // error JSON is still useful at startup
+    CHECK(IsErrorDescriptor(buf, bad));
+    CHECK(!succeeded); // but must not replace a working runtime descriptor
+    CHECK(render(buf, sizeof buf) == good);
+    CHECK(succeeded); // retry recovers; failure does not latch in the builder
+    char small[512];
+    const uint32_t overflow = render(small, sizeof small);
+    CHECK(IsErrorDescriptor(small, overflow));
+    CHECK(!succeeded);
+    char tiny[1];
+    CHECK_EQ(render(tiny, sizeof tiny), 0u);
+    CHECK(!succeeded);
+}
+
 static void TestFactoryDefaultsImage()
 {
     SurfaceFixture sf;
@@ -2156,6 +2238,7 @@ int main(int argc, char** argv)
     TestCrc32();
     TestCobs();
     TestFrameRoundtrip();
+    TestDescriptorReplacement();
 
     {
         Fixture fx;
@@ -2177,6 +2260,7 @@ int main(int argc, char** argv)
     TestManualValidation();
     TestManualHashStability();
     TestFactoryDefaultsImage();
+    TestDescriptorBuildResult();
     TestButtonsEmission();
     TestComponentMeta();
     TestJsonCheck();

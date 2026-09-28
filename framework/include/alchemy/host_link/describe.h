@@ -78,7 +78,8 @@ struct PageSet
  * pre-BootLoad SerializeLive image: field defs decode from it, so the
  * render may run after presets load.  Returns the descriptor length; a
  * failed build returns a minimal error descriptor (see above), and 0
- * only when even that overflows @p cap.
+ * only when even that overflows @p cap. If supplied, @p succeeded is
+ * true only for a complete valid build, never for the error fallback.
  */
 uint32_t RenderDescriptor(char* buf, size_t cap,
                           const DescriptorBuilder::ModuleInfo& info,
@@ -94,7 +95,8 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           uint8_t num_jacks = 0u,
                           const Manual* manual = nullptr,
                           const uint8_t* factory = nullptr,
-                          size_t factory_len = 0u);
+                          size_t factory_len = 0u,
+                          bool* succeeded = nullptr);
 
 } // namespace hostlink
 } // namespace alchemy

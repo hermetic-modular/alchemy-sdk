@@ -376,8 +376,10 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
                           uint8_t num_jacks,
                           const Manual* manual,
                           const uint8_t* factory,
-                          size_t factory_len)
+                          size_t factory_len,
+                          bool* succeeded)
 {
+    if (succeeded) *succeeded = false;
     /* A manual tagline rides the module{} block. */
     DescriptorBuilder::ModuleInfo mi = info;
     if (manual && manual->TaglineText() && !mi.tagline)
@@ -453,7 +455,11 @@ uint32_t RenderDescriptor(char* buf, size_t cap,
     }
 
     const uint32_t len = ok ? db.Finish() : 0u;
-    if (len) return len;
+    if (len)
+    {
+        if (succeeded) *succeeded = true;
+        return len;
+    }
     return RenderErrorDescriptor(buf, cap, mi, db.LastError());
 }
 

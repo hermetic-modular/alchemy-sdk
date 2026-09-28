@@ -83,8 +83,9 @@ class Host : public HostService
     Host(const char* id, const char* name,
          const char* fw_version, const char* git_hash);
 
-    /** False after invalid/overlapping/excess/late extension registration.
-     * The valid features keep running; check this after setup/Start(). */
+    /** False after invalid/overlapping/excess/late extension registration
+     *  or late refresh-workspace configuration. Valid features keep running;
+     *  check this after setup/Start(). */
     bool ConfigurationOk() const { return configuration_ok_; }
 
     /* ── Optional configuration (call before the link starts) ───────── */
@@ -101,6 +102,11 @@ class Host : public HostService
 
     /** Custom descriptor buffer (default: SDK-owned 24 KiB in SDRAM). */
     Host& DescriptorBuffer(char* buf, size_t cap);
+
+    /** Refresh workspace (default: SDK-owned 24 KiB in SDRAM). Must not
+     *  overlap the descriptor, staging, or snapshot buffers. Configure
+     *  before Start(); large custom descriptors need matching workspace. */
+    Host& DescriptorRefreshBuffer(char* buf, size_t cap);
 
     /** Custom byte transport (default: CDC on the panel USB-C). */
     Host& Transport(IHostTransport& transport);
@@ -161,8 +167,9 @@ class Host : public HostService
         return *this;
     }
 
-    /** Declare the module's jacks (root "jacks" array).  Same lifetime
-     *  rule as Buttons(). */
+    /** Replace the module's jacks (root "jacks" array). Same lifetime
+     *  rule as Buttons(). After Start(), follow replacements or edits to
+     *  the referenced objects with RequestDescriptorRefresh(). */
     Host& Jacks(const Jack* jacks, uint8_t count);
 
     template <size_t N>
@@ -202,6 +209,23 @@ class Host : public HostService
      *  everything main() declares is attached. */
     void Start();
 
+    enum class RefreshStatus : uint8_t { Idle, Pending, Succeeded, Failed };
+
+    /** Queue a metadata-only rebuild at the next Poll(). Call after
+     *  changing long-lived jack/page/button/manual declarations, on the
+     *  same main/control thread as Poll(), never from the audio ISR.
+     *  Repeated requests coalesce. Field identities and storage layout
+     *  must stay stable; size/schema changes fail. Factory defaults stay
+     *  those captured before BootLoad (or at Start if BootLoad was omitted).
+     *  Custom describers must keep their explicit default values stable.
+     *  Failure retains the published descriptor; retry explicitly after
+     *  correcting the declaration. No wire-version change; hosts discover
+     *  new length/CRC via HELLO and refetch from offset zero.
+     *  Returns false for a hand-rolled Descriptor() or a preset-free Host.
+     *  Their existing behavior and extensions are unaffected. */
+    bool RequestDescriptorRefresh();
+    RefreshStatus DescriptorRefreshStatus() const { return refresh_status_; }
+
     /** HostService: pump + execute (ControlLoop calls this at 1 ms). */
     void Poll(uint32_t t_ms) override;
 
@@ -218,6 +242,8 @@ class Host : public HostService
 
     static void PreBootTrampoline(void* self);
     void CaptureFactory();
+    uint32_t BuildDescriptor(char* buf, size_t cap, bool* succeeded);
+    void RefreshDescriptor();
     void AddPage(const Page& p);
     void AddButton(const VirtualButton& b)
     {
@@ -242,6 +268,9 @@ class Host : public HostService
     size_t   buf_cap_  = 0u;
     char*    desc_buf_ = nullptr;
     size_t   desc_cap_ = 0u;
+    char*    refresh_buf_ = nullptr;
+    size_t   refresh_cap_ = 0u;
+    uint32_t desc_len_ = 0u;
 
     IHostTransport* transport_ = nullptr;
     const uint8_t*  uid_       = nullptr;
@@ -272,6 +301,9 @@ class Host : public HostService
     bool      started_     = false;
     bool      configuration_ok_ = true;
     size_t    factory_len_ = 0u;
+    uint32_t  factory_schema_ = 0u;
+    bool      factory_captured_ = false;
+    RefreshStatus refresh_status_ = RefreshStatus::Idle;
     alignas(HostLink) uint8_t link_storage_[sizeof(HostLink)];
 };
 

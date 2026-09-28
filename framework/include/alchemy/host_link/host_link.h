@@ -72,7 +72,10 @@ class HostLink
 
     /** Attach the pre-rendered descriptor JSON (see DescriptorBuilder).
      *  Pass len = 0 to advertise "no descriptor".  The buffer must stay
-     *  valid for the lifetime of the link. */
+     *  valid and immutable until the next SetDescriptor(). Call only
+     *  on the Poll() thread. Replacing the bytes invalidates an ongoing
+     *  read: nonzero offsets return BadState until a new offset-zero
+     *  request. Hosts restart with HELLO and verify its length/CRC. */
     void SetDescriptor(const void* json, uint32_t len);
 
     /** 96-bit MCU unique id, reported in HELLO. */
@@ -129,6 +132,7 @@ class HostLink
     const uint8_t* desc_     = nullptr;
     uint32_t       desc_len_ = 0u;
     uint32_t       desc_crc_ = 0u;
+    bool           desc_read_valid_ = true;
     uint8_t        uid_[12]  = {};
 
     FrameParser parser_;

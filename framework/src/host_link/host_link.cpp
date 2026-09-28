@@ -32,6 +32,9 @@ static inline uint32_t CapOf(size_t buf_cap)
 
 void HostLink::SetDescriptor(const void* json, uint32_t len)
 {
+    // The initial attachment preserves offset-based reads. A replacement
+    // forces any reader of the old bytes to restart, even at equal length.
+    if (desc_len_ > 0u) desc_read_valid_ = false;
     desc_     = static_cast<const uint8_t*>(json);
     desc_len_ = (json != nullptr) ? len : 0u;
     desc_crc_ = (desc_len_ > 0u) ? Crc32(desc_, desc_len_) : 0u;
@@ -203,6 +206,10 @@ void HostLink::OnGetDescriptor(const ParsedFrame& f)
 
     const uint32_t offset  = RdU32(f.body);
     uint16_t       max_len = RdU16(f.body + 4);
+
+    // A refresh must never splice new bytes into an older read.
+    if (offset == 0u) desc_read_valid_ = true;
+    if (!desc_read_valid_) { RespondStatus(f, Status::BadState); return; }
 
     /* Response header: status(1) + offset(4) + n(2) = 7. */
     constexpr uint16_t kChunkMax = kMaxBody - 7u;

@@ -24,10 +24,12 @@ namespace hostlink {
 
 /* One Host per system (the CDC callback is a hardware singleton), so
  * SDK-owned default buffers are safe to share.  SDRAM: big, cold, not
- * zeroed by startup — hence the memsets in Start().  s_snapshot needs
- * none: every reader stays within the length last serialized into it
- * (the factory image, then GET_LIVE). */
+ * zeroed by startup. Readers stay within the length last written.
+ * Factory defaults have dedicated storage: GET_LIVE reuses s_snapshot.
+ * A refresh builds in scratch before touching the published descriptor. */
 static char    DSY_SDRAM_BSS s_descriptor[24u * 1024u];
+static char    DSY_SDRAM_BSS s_descriptor_refresh[sizeof s_descriptor];
+static uint8_t DSY_SDRAM_BSS s_factory[kPresetBlobCapacity];
 static uint8_t DSY_SDRAM_BSS s_staging [kPresetBlobCapacity];
 static uint8_t DSY_SDRAM_BSS s_snapshot[kPresetBlobCapacity];
 
@@ -64,8 +66,10 @@ void Host::PreBootTrampoline(void* self)
 
 void Host::CaptureFactory()
 {
-    if (!presets_ || factory_len_) return;
-    factory_len_ = presets_->SerializeLive(s_snapshot, sizeof s_snapshot);
+    if (!presets_ || factory_captured_) return;
+    factory_captured_ = true;
+    factory_schema_ = presets_->LiveSchemaHash();
+    factory_len_ = presets_->SerializeLive(s_factory, sizeof s_factory);
 }
 
 Host& Host::Product(const char* usb_product) { product_ = usb_product; return *this; }
@@ -83,6 +87,13 @@ Host& Host::DescriptorBuffer(char* buf, size_t cap)
 {
     desc_buf_ = buf;
     desc_cap_ = cap;
+    return *this;
+}
+
+Host& Host::DescriptorRefreshBuffer(char* buf, size_t cap)
+{
+    if (!started_) { refresh_buf_ = buf; refresh_cap_ = cap; }
+    else configuration_ok_ = false;
     return *this;
 }
 
@@ -157,11 +168,10 @@ void Host::Start()
 {
     if (started_) return;
     started_ = true;
+    CaptureFactory(); // fallback for apps that do not call BootLoad()
 
     if (presets_ && !staging_)
     {
-        /* s_snapshot may hold the factory image — consumed below, then
-         * free for the link's GET_LIVE scratch. */
         std::memset(s_staging, 0, sizeof s_staging);
         staging_  = s_staging;
         snapshot_ = s_snapshot;
@@ -172,6 +182,11 @@ void Host::Start()
         std::memset(s_descriptor, 0, sizeof s_descriptor);
         desc_buf_ = s_descriptor;
         desc_cap_ = sizeof s_descriptor;
+    }
+    if (!refresh_buf_)
+    {
+        refresh_buf_ = s_descriptor_refresh;
+        refresh_cap_ = sizeof s_descriptor_refresh;
     }
     if (!transport_)
     {
@@ -191,10 +206,8 @@ void Host::Start()
 
 #if defined(ALCHEMY_BOARD_V2)
     constexpr uint8_t kBoardNum   = 2u;
-    const char*       board_name  = "v2";
 #else
     constexpr uint8_t kBoardNum   = 1u;
-    const char*       board_name  = "v1";
 #endif
 
     const HostLink::Info info{id_, name_, fw_, git_, ALCHEMY_SDK_VERSION,
@@ -211,37 +224,8 @@ void Host::Start()
     }
     else if (presets_)
     {
-        /* Page metadata: explicit .Pages() wins; else whatever the
-         * attached ControlLoop has by now. */
-        if (num_pages_ == 0u && loop_)
-        {
-            uint8_t n = loop_->NumAttachedPages();
-            if (n > kMaxPageRefs) n = kMaxPageRefs;
-            for (uint8_t i = 0; i < n; i++)
-                pages_[num_pages_++] = loop_->AttachedPage(i);
-        }
-        const PageSet set{pages_, num_pages_};
-
-        /* Extension advertisements → descriptor root fragments. */
-        const char* frags[HostLink::kMaxExtensions];
-        uint8_t     num_frags = 0u;
-        for (uint8_t i = 0u; i < num_extensions_; i++)
-        {
-            const char* frag = extensions_[i]->DescriptorRootJson();
-            if (frag) frags[num_frags++] = frag;
-        }
-
-        const uint32_t len = RenderDescriptor(
-            desc_buf_, desc_cap_,
-            DescriptorBuilder::ModuleInfo{id_, name_, fw_, git_,
-                                          ALCHEMY_SDK_VERSION, board_name},
-            *presets_, num_pages_ ? &set : nullptr,
-            overrides_, num_overrides_,
-            num_buttons_ ? btn_ptrs_ : nullptr, num_buttons_,
-            num_frags ? frags : nullptr, num_frags,
-            num_jacks_ ? jack_ptrs_ : nullptr, num_jacks_, manual_,
-            factory_len_ ? s_snapshot : nullptr, factory_len_);
-        link_->SetDescriptor(desc_buf_, len);
+        desc_len_ = BuildDescriptor(desc_buf_, desc_cap_, nullptr);
+        link_->SetDescriptor(desc_buf_, desc_len_);
     }
 
     if (uid_)
@@ -267,9 +251,89 @@ void Host::Start()
         if (!link_->Extend(*extensions_[i])) configuration_ok_ = false;
 }
 
+uint32_t Host::BuildDescriptor(char* buf, size_t cap, bool* succeeded)
+{
+    // Use live ControlLoop page references unless Pages() was explicit.
+    const Page* attached[kMaxPageRefs] = {};
+    PageSet set{pages_, num_pages_};
+    if (num_pages_ == 0u && loop_)
+    {
+        set.count = loop_->NumAttachedPages();
+        if (set.count > kMaxPageRefs) set.count = kMaxPageRefs;
+        for (uint8_t i = 0; i < set.count; ++i)
+            attached[i] = loop_->AttachedPage(i);
+        set.pages = attached;
+    }
+
+    const char* frags[HostLink::kMaxExtensions];
+    uint8_t num_frags = 0u;
+    for (uint8_t i = 0u; i < num_extensions_; ++i)
+    {
+        const char* frag = extensions_[i]->DescriptorRootJson();
+        if (frag) frags[num_frags++] = frag;
+    }
+#if defined(ALCHEMY_BOARD_V2)
+    const char* board = "v2";
+#else
+    const char* board = "v1";
+#endif
+    return RenderDescriptor(buf, cap,
+        DescriptorBuilder::ModuleInfo{id_, name_, fw_, git_,
+                                      ALCHEMY_SDK_VERSION, board},
+        *presets_, set.count ? &set : nullptr, overrides_, num_overrides_,
+        num_buttons_ ? btn_ptrs_ : nullptr, num_buttons_,
+        num_frags ? frags : nullptr, num_frags,
+        num_jacks_ ? jack_ptrs_ : nullptr, num_jacks_, manual_,
+        s_factory, factory_len_, succeeded);
+}
+
+bool Host::RequestDescriptorRefresh()
+{
+    if (!presets_ || manual_desc_) return false;
+    refresh_status_ = RefreshStatus::Pending;
+    return true;
+}
+
+// Subtraction avoids address overflow when checking caller-owned buffers.
+static bool Overlap(const void* a, size_t an, const void* b, size_t bn)
+{
+    if (!a || !b || !an || !bn) return false;
+    const auto x = reinterpret_cast<uintptr_t>(a);
+    const auto y = reinterpret_cast<uintptr_t>(b);
+    return x <= y ? y - x < an : x - y < bn;
+}
+
+void Host::RefreshDescriptor()
+{
+    refresh_status_ = RefreshStatus::Failed;
+    if (!presets_ || manual_desc_ || !factory_captured_
+        || factory_len_ != presets_->LiveSize()
+        || factory_schema_ != presets_->LiveSchemaHash()) return;
+
+    const size_t cap = refresh_cap_ < desc_cap_ ? refresh_cap_ : desc_cap_;
+    if (!refresh_buf_ || !desc_buf_ || !cap
+        || Overlap(refresh_buf_, cap, desc_buf_, desc_cap_)
+        || Overlap(refresh_buf_, cap, staging_, buf_cap_)
+        || Overlap(refresh_buf_, cap, snapshot_, buf_cap_)
+        || Overlap(refresh_buf_, cap, s_factory, sizeof s_factory)) return;
+
+    bool succeeded = false;
+    const uint32_t len = BuildDescriptor(refresh_buf_, cap, &succeeded);
+    if (!succeeded) return; // never publish the error-descriptor fallback
+
+    if (len != desc_len_ || std::memcmp(desc_buf_, refresh_buf_, len) != 0)
+    {
+        std::memcpy(desc_buf_, refresh_buf_, len);
+        desc_len_ = len;
+        link_->SetDescriptor(desc_buf_, desc_len_);
+    }
+    refresh_status_ = RefreshStatus::Succeeded;
+}
+
 void Host::Poll(uint32_t t_ms)
 {
     if (!started_) Start();
+    if (refresh_status_ == RefreshStatus::Pending) RefreshDescriptor();
     link_->Poll(t_ms);
 }
 
