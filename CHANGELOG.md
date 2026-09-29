@@ -1,3 +1,89 @@
+# Alchemy SDK v0.12.0 | 2026-09-29
+
+USB diagnostics now share the HostLink connection, including on firmware without presets. Selectors fixed to match across values, rings, and the browser; firmware can refresh its published metadata while connected. Also: corrected codec CV scaling, reliable codec-input trigger detection, a rollover-safe control-loop timebase, and stricter calibration validation.
+
+## Control-loop timebase (#35)
+
+- Fixed a major issue causing a 50 millisecond stutter every 21 seconds on clock analysis.
+- Added `TickTimebase`, which accumulates wrapping hardware ticks into microseconds with the wrap behavior expected by the timing APIs.
+- `ControlLoop` now uses this timebase for CV edge processing and exposes the current poll timestamp through `PollTimeUs()`.
+- Custom clock wiring should use `loop.PollTimeUs()` inside `OnPoll`, or its own `TickTimebase`, instead of passing `daisy::System::GetUs()` directly to timing consumers.
+- A timebase must be updated before the underlying raw counter completes a full wrap. Initialize it after hardware startup and keep related timing consumers on the same epoch.
+
+## USB diagnostics and Host lifecycle (#40)
+
+- Added the optional `hostlink::Diagnostics` extension. `Debug()`, `Info()`, `Warn()`, and `Error()` write bounded messages without waiting for a USB client. `PrintLine()` is an Info-level migration alias.
+- Added typed `Gauge<float>`, `Gauge<int32_t>`, `Gauge<uint32_t>`, and `Gauge<bool>` values. `Set()` publishes the latest scalar and can run in an audio callback; formatted logging belongs on the main/control thread.
+- Default storage is 32 log records with 160 text bytes each, plus up to 16 registered gauges. Overflow and truncation are reported. Logs are volatile.
+- Added a Host constructor without `Presets`, for identity, reboot, and protocol extensions without a dummy preset store.
+- The default Host starts at its first `Poll()`, after setup has attached the module’s declarations. Factory-state capture remains separate from link startup.
+- Added CLI log capture and live-value watching. The web programmer’s Device console uses the same diagnostics protocol.
+- Do not combine HostLink with raw `seed.PrintLine()` or direct USB writes on the same port.
+
+## Selector consistency (#53; issue #47)
+
+- Settings rings now render the resolved selection index instead of independently quantizing the knob position.
+- `VirtualKnob::Selector(N)` uses equal-width bins. Its value count also controls selector-ring selection, independently of builder order.
+- Fixed selected zones being overwritten by inactive zones when several choices share an LED.
+- Auto-derived selector display hints now include `disp.bins`. The browser uses matching selection boundaries and writes bin centers.
+- Existing display hints without `bins`, explicit `.Disp()` overrides, and standalone selector-animation conventions retain their previous interpretation.
+- Settings selections remain bytes and performance values remain normalized floats. Preset offsets, sizes, and schema formats are unchanged by these fixes.
+
+## Manual capacity and control visibility (#54; issues #41 and #43)
+
+- Increased the module manual limit from eight to sixteen sections.
+- Added `Page::HidePot(pot, hidden)` and `PotHidden(pot)`.
+- Hidden controls remain in serialization and factory defaults. Visibility affects editor/manual presentation without removing stored values or changing physical pot positions.
+- Unassigned positions are not automatically treated as explicitly hidden controls.
+
+## Runtime descriptor refresh (#55; issue #45)
+
+- Added `Host::RequestDescriptorRefresh()` and `DescriptorRefreshStatus()`.
+- Refreshes rebuild auto-derived metadata on the main/control thread. Repeated pending requests coalesce.
+- Field identities and storage layout must remain stable. Factory defaults remain the originally captured defaults rather than becoming the current live state.
+- A rejected refresh retains the previously published descriptor. Correct the declarations and explicitly request another refresh to retry.
+- Added `DescriptorRefreshBuffer()` for applications whose custom descriptor capacity exceeds the default workspace.
+- Hand-written `Descriptor()` data and preset-free Hosts do not support this refresh path.
+- Hosts discover changes through descriptor length/CRC and restart descriptor transfers from offset zero.
+
+## Button gesture metadata (#37)
+
+- Root button descriptions now include structured tap and hold declarations and their help text.
+- Firmware no longer needs duplicate metadata-only actions to expose those gestures.
+- Existing explicit `.Action()` descriptions remain supported.
+
+## Codec-input triggers (#38)
+
+- Reworked J1/J2 detection around fast positive transitions through the AC-coupled input path, with hysteresis and ringing rejection.
+- `RisingEdge()` consumes an atomic latch. Multiple rises between reads coalesce; applications should read once and reuse the result.
+- V2 `StartAudio()` now accepts an omitted application callback. The SDK still processes trigger inputs and claimed codec CV outputs; unclaimed outputs are cleared.
+- Removed `SetTriggerThreshold()`. Detection no longer requires threshold configuration.
+- These inputs detect transitions, not sustained gate levels or DC pitch voltage.
+
+## J9/J10 CV conversion (#52; issue #48)
+
+- Corrected voltage-to-sample polarity and gain for the standard Seed2 DFM DC-coupled output circuit.
+- Nominal conversion is `sample = volts / -8.666667`, with generated samples bounded to the codec range.
+- Non-finite voltage requests are rejected without replacing the previous target.
+- This is a circuit-based conversion, not per-board calibration. J9/J10 have no ADC readback through this path.
+- Ordinary audio output and the existing CV ownership API are unchanged. `Volts()` continues to report the requested target, not a measured output.
+
+## Calibration validation (#36)
+
+- Added checks for reference validity, input noise and saturation, disconnected-output isolation, sweep progression, fitted response, and usable range.
+- Failed measurements are rejected before replacing the stored calibration.
+- Calibration persistence now verifies the written record before reporting success.
+- Stored records receive stronger validity checks before use.
+- Calibration remains specific to J3–J8. It does not calibrate the codec outputs.
+
+## Compatibility and companion web changes
+
+- Descriptor additions remain optional and `dv` stays 1.
+- The updated programmer supports selector bins, hidden controls, runtime metadata refresh, diagnostics, and Hosts without presets.
+- Existing firmware retains its supported editor behavior.
+- Applications using `SetTriggerThreshold()` must remove those calls.
+- Clock code outside `ControlLoop` must explicitly adopt a suitable timebase; updating the SDK does not rewrite an application’s timestamp source.
+
 # Alchemy SDK v0.11.0 | 2026-09-04
 
 ## Parameter locks v2 (#29)
