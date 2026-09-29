@@ -9,6 +9,8 @@
 #include <cstring>
 
 #include "alchemy/hw/alchemy_lab.h"
+#include "alchemy/control/selector.h"
+#include "alchemy/led/ring_frame.h"
 #include "alchemy/led/anims/catch_pip.h"
 #include "alchemy/surface/lock_source.h"
 #include "alchemy/surface/manual.h"
@@ -525,12 +527,7 @@ void Settings::Update(const float* phys, uint32_t t_ms)
             case SettingsKind::Selector:
             {
                 UpdateCatch(s.pot, phys[p], t_ms);
-                float v = s.pot.stored;
-                if (v < 0.0f) v = 0.0f;
-                if (v > 1.0f) v = 1.0f;
-                int idx = static_cast<int>(v * static_cast<float>(s.num_zones));
-                if (idx >= static_cast<int>(s.num_zones)) idx = s.num_zones - 1;
-                s.value_idx = static_cast<uint8_t>(idx);
+                s.value_idx = SelectorIndex(s.pot.stored, s.num_zones);
                 if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
                 if (s.lock_exit_src)
                     s.lock_exit_src->SetExitMode(ExitModeFromZone(s.value_idx));
@@ -636,7 +633,10 @@ void Settings::Render(uint32_t t_ms) const
                 {
                     desc.active_color = LedPanel::Scale(s.color, k);
                 }
-                DrawSelector(hw_->leds, p, geo, s.pot.stored, desc);
+                RingFrame frame;
+                frame.Begin(geo);
+                frame.BaseZone(desc, s.value_idx);
+                frame.Emit(hw_->leds, p);
                 DrawCatchPip(hw_->leds, p, s.pot, geo, {0xFF, 0xFF, 0xFF});
                 break;
             }

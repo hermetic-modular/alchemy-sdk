@@ -22,10 +22,21 @@ target_link_libraries(cv_input_test PRIVATE alchemy::primitives)
 
 add_test(NAME cv_input COMMAND cv_input_test)
 
+# The codec CV transfer is independent of the hardware drivers.
+add_executable(v2_codec_cv_test v2_codec_cv_test.cpp)
+target_include_directories(v2_codec_cv_test PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../hardware/alchemy-lab/v2/include")
+
+add_test(NAME v2_codec_cv COMMAND v2_codec_cv_test)
+
 add_executable(clock_follower_test clock_follower_test.cpp)
 target_link_libraries(clock_follower_test PRIVATE alchemy::primitives)
 
 add_test(NAME clock_follower COMMAND clock_follower_test)
+
+add_executable(tick_timebase_test tick_timebase_test.cpp)
+target_link_libraries(tick_timebase_test PRIVATE alchemy::primitives)
+add_test(NAME tick_timebase COMMAND tick_timebase_test)
 
 add_executable(pot_gate_test pot_gate_test.cpp)
 target_link_libraries(pot_gate_test PRIVATE alchemy::primitives)
@@ -33,3 +44,11 @@ target_link_libraries(pot_gate_test PRIVATE alchemy::primitives)
 add_test(NAME pot_gate COMMAND pot_gate_test)
 
 add_subdirectory(host)
+
+add_executable(v2_calibration_test v2_calibration_test.cpp
+    ../hardware/alchemy-lab/v2/src/v2_factory_cal.cpp
+    ../hardware/alchemy-lab/v2/src/v2_calibration.cpp)
+target_compile_definitions(v2_calibration_test PRIVATE ALCHEMY_CALIBRATION_HOST_TEST=1)
+target_include_directories(v2_calibration_test PRIVATE
+    ../hardware/alchemy-lab/v2/include)
+add_test(NAME v2_calibration COMMAND v2_calibration_test)

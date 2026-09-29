@@ -2,21 +2,10 @@
  * @file v2_factory_cal.cpp
  * @brief V2 factory calibration — bare-metal ADC, loopback sweep, QSPI persist.
  *
- * Ported from the bench-validated `cal_writer` firmware
- * (alchemy-lab-v2-cal-sanity/cal_writer), minus USB logging. The numeric
- * procedure is identical:
- *
- *   1. VREFINT pass — ADC3 channel 19, 500-sample average, VDDA via the
- *      factory cal word at 0x1FF1E860. Out-of-range result falls back to
- *      an assumed 3.30 V (recorded in vdda_source).
- *   2. ADC zero pass — DG411s open, 500-sample average per jack.
- *   3. DAC sweep per jack — route via DG411, 17 codes across [0, 4095],
- *      500 samples per point, 5 ms settle. Jack volts derived from the
- *      MEASURED per-channel zero (keeps input-bias tolerance out of the
- *      fit). Linear fit over the trimmed middle; usable range found by
- *      walking outward until a point saturates (>100 mV off the fit).
- *   4. Persist — CRC32, QSPI sector erase + write + byte-verify.
- *   5. Wait for button release, NVIC_SystemReset().
+ * Uses the shared V2RunCalibration manufacturing checks, with all CV jacks
+ * unpatched. Invalid references, I/O errors, noisy/stuck paths, bad fits,
+ * switch/isolation faults and verification errors fail before persistence.
+ * Normal tolerance and limited endpoint compression are allowed.
  *
  * Bare-metal ADC notes (same rationale as the bench firmware):
  *   - One-shot polled conversions, 16-bit, 810.5-cycle sampling.
@@ -29,6 +18,199 @@
  *     than hardcoded, via ADC_CHANNEL_ID_NUMBER_MASK.
  */
 
+// The shared engine lives in this original translation unit so existing
+// firmware source lists retain B1+B2 calibration without adding new .cpp files.
+#include "alchemy/hw/v2_calibration_runner.h"
+#include <algorithm>
+#include <cstring>
+
+namespace alchemy {
+
+bool V2RunCalibration(V2CalIo& io, bool paired, V2Calibration& out,
+                      V2CalReport& report)
+{
+    out = {};
+    report = {};
+    report.jack = 255;
+    auto detail = [&](uint8_t metric, double observed, double low, double high, uint8_t measured = 255) {
+        report.metric = metric; report.observed = observed;
+        report.low = low; report.high = high; report.measured_jack = measured;
+    };
+    auto fail = [&](V2CalFailure reason) {
+        report.failure = io.Cancelled() ? V2CalFailure::Cancelled : reason;
+        io.AllOff(); // Never claim cleanup succeeded after an I/O failure.
+        out.magic = out.crc32 = 0;
+        return false;
+    };
+    if (!io.AllOff()) return fail(V2CalFailure::Io);
+    if (!io.Reference(out.vdda_at_cal) || !V2CalVddaValid(out.vdda_at_cal)) {
+        detail(1, out.vdda_at_cal, 3.0, 3.6);
+        return fail(V2CalFailure::Reference);
+    }
+    out.vdda_source = kV2VddaMeasured;
+    const double scale = out.vdda_at_cal / (65535.0 * kV2CvInGainDesign);
+    double zeros[6] = {};
+    auto samples_valid = [&](uint8_t j, const V2CalSamples& s) {
+        auto& r = report.channels[j];
+        r.noise_v = std::max(r.noise_v, static_cast<float>(s.StdDev() * scale));
+        if (V2CalSamplesValid(s, out.vdda_at_cal)) return true;
+        if (s.minimum <= 64 || s.maximum >= 65471)
+            detail(5, s.minimum <= 64 ? s.minimum : s.maximum, 65, 65470, j);
+        else if ((s.maximum - s.minimum)*scale > kV2CalMaxPeakToPeakV)
+            detail(4, (s.maximum - s.minimum)*scale, 0, kV2CalMaxPeakToPeakV, j);
+        else detail(3, s.StdDev()*scale, 0, kV2CalMaxNoiseV, j);
+        report.failure = V2CalFailure::Noise;
+        return false;
+    };
+    auto sample = [&](uint8_t j, uint32_t n, double& volts) {
+        V2CalSamples s;
+        if (!io.Capture(j, n, s)) return false;
+        if (!samples_valid(j, s)) return false;
+        volts = (zeros[j] - s.mean) * scale;
+        return true;
+    };
+    if (!io.Wait(20)) return fail(V2CalFailure::Io);
+    for (uint8_t j = 0; j < 6; ++j) {
+        report.jack = j;
+        report.channels[j].stage = 1;
+        io.Progress(j, 0);
+        V2CalSamples s;
+        if (!io.Capture(j, 128, s)) return fail(V2CalFailure::Io);
+        report.channels[j].zero_raw = static_cast<float>(s.mean);
+        if (!samples_valid(j, s)) return fail(V2CalFailure::Noise);
+        if (!V2CalZeroValid(s.mean, out.vdda_at_cal)) {
+            detail(2, s.mean*out.vdda_at_cal/65535., 1.35, 1.95, j);
+            return fail(V2CalFailure::Zero);
+        }
+        zeros[j] = s.mean;
+        report.channels[j].noise_v = static_cast<float>(s.StdDev() * scale);
+        out.jack[j].adc_zero_code = static_cast<uint16_t>(s.mean + 0.5);
+    }
+    for (uint8_t j = 0; j < 6; ++j) {
+        report.jack = j;
+        auto& r = report.channels[j];
+        r.stage = 2;
+        // Changing the disconnected DAC must not appear on any input.
+        if (!io.AllOff()) return fail(V2CalFailure::Io);
+        for (uint16_t code : {uint16_t(512), uint16_t(3583)}) {
+            if (!io.Write(j, code) || !io.Wait(5)) return fail(V2CalFailure::Io);
+            for (uint8_t other = 0; other < 6; ++other) {
+                double v;
+                if (!sample(other, 32, v)) return fail(report.failure == V2CalFailure::Noise ? report.failure : V2CalFailure::Io);
+                if (std::fabs(v) > kV2CalMaxResidualV) {
+                    detail(6, v, -kV2CalMaxResidualV, kV2CalMaxResidualV, other);
+                    return fail(V2CalFailure::Isolation);
+                }
+            }
+        }
+        // Stage neutral before connecting. Only one DAC may be connected.
+        if (!io.Write(j, 2048) || !io.Connect(j)) return fail(V2CalFailure::Io);
+        double x[17], y[17];
+        r.stage = 3;
+        for (uint8_t k = 0; k < 17; ++k) {
+            report.step = k;
+            io.Progress(j, k + 1);
+            const uint16_t code = (k * 4095u + 8u) / 16u;
+            if (!io.Write(j, code) || !io.Wait(5)) return fail(V2CalFailure::Io);
+            x[k] = code;
+            if (!sample(j, 128, y[k])) return fail(report.failure == V2CalFailure::Noise ? report.failure : V2CalFailure::Io);
+            r.sweep_v[k] = static_cast<float>(y[k]);
+            r.sweep_points = k + 1;
+            // Interior must progress by a meaningful amount; allow only
+            // endpoint flattening, never a flat/noisy central fit.
+            if (k >= 3 && k <= 14 && y[k - 1] - y[k] < 0.20) {
+                detail(9, y[k-1]-y[k], 0.20, 12, j);
+                return fail(V2CalFailure::Response);
+            }
+            if (k && y[k] - y[k - 1] > 0.025) {
+                detail(10, y[k]-y[k-1], -12, 0.025, j);
+                return fail(V2CalFailure::Response);
+            }
+            if (k == 4 || k == 12) {
+                for (uint8_t other = 0; other < 6; ++other) {
+                    if (other == j) continue;
+                    double v;
+                    if (!sample(other, 64, v)) return fail(report.failure == V2CalFailure::Noise ? report.failure : V2CalFailure::Io);
+                    const bool mate = paired && other == 5 - j;
+                    const double error = std::fabs(v - (mate ? y[k] : 0.0));
+                    if (mate) r.cross_error_v = std::max(r.cross_error_v, static_cast<float>(error));
+                    if (error > (mate ? kV2CalCrossErrorV : kV2CalMaxResidualV)) {
+                        detail(mate ? 7 : 8, error, 0, mate ? kV2CalCrossErrorV : kV2CalMaxResidualV, other);
+                        return fail(V2CalFailure::Isolation);
+                    }
+                }
+            }
+        }
+        r.span_v = static_cast<float>(y[0] - y[16]);
+        if (y[0] < kV2CalMinEndpointV || y[0] > kV2CalMaxEndpointV) {
+            detail(11, y[0], kV2CalMinEndpointV, kV2CalMaxEndpointV, j);
+            return fail(V2CalFailure::Range);
+        }
+        if (y[16] > -kV2CalMinEndpointV || y[16] < -kV2CalMaxEndpointV) {
+            detail(12, y[16], -kV2CalMaxEndpointV, -kV2CalMinEndpointV, j);
+            return fail(V2CalFailure::Range);
+        }
+        r.stage = 4;
+        double sx=0, sy=0, sxx=0, sxy=0;
+        for (uint8_t k = 2; k <= 14; ++k) {
+            sx += x[k]; sy += y[k]; sxx += x[k]*x[k]; sxy += x[k]*y[k];
+        }
+        const double slope = (13*sxy - sx*sy) / (13*sxx - sx*sx);
+        const double offset = (sy - slope*sx) / 13;
+        auto& c = out.jack[j];
+        c.dac_gain_v_per_code = static_cast<float>(slope);
+        c.dac_offset_v = static_cast<float>(offset);
+        uint8_t lo=2, hi=14;
+        auto residual = [&](uint8_t k) { return std::fabs(y[k] - (offset+slope*x[k])); };
+        for (uint8_t k = 2; k <= 14; ++k) {
+            r.residual_v = std::max(r.residual_v, static_cast<float>(residual(k)));
+            if (residual(k) > kV2CalMaxResidualV) {
+                detail(13, residual(k), 0, kV2CalMaxResidualV, j);
+                return fail(V2CalFailure::Fit);
+            }
+        }
+        while (lo > 0 && residual(lo-1) <= kV2CalMaxResidualV) --lo;
+        while (hi < 16 && residual(hi+1) <= kV2CalMaxResidualV) ++hi;
+        c.dac_min_linear_code = static_cast<uint16_t>(x[lo]);
+        c.dac_max_linear_code = static_cast<uint16_t>(x[hi]);
+        if (!V2CalJackValid(c, out.vdda_at_cal)) {
+            detail(14, slope, kV2CvOutGainDesign*kV2VddaDesign/4096.0f*1.2f,
+                   kV2CvOutGainDesign*kV2VddaDesign/4096.0f*0.8f, j);
+            return fail(V2CalFailure::Fit);
+        }
+        // Fresh, non-fit points in alternating order exercise settling and
+        // inversion of the actual candidate coefficients.
+        r.stage = 5;
+        for (double target : {3.7, -3.7, 1.3, -1.3, 0.0}) {
+            const double code_f = (target - offset) / slope;
+            if (!(code_f >= c.dac_min_linear_code && code_f <= c.dac_max_linear_code))
+                return fail(V2CalFailure::Range);
+            if (!io.Write(j, static_cast<uint16_t>(code_f + 0.5)) || !io.Wait(5))
+                return fail(V2CalFailure::Io);
+            double v;
+            if (!sample(j, 128, v)) return fail(report.failure == V2CalFailure::Noise ? report.failure : V2CalFailure::Io);
+            r.verification_v = std::max(r.verification_v, static_cast<float>(std::fabs(v-target)));
+            ++r.verification_points;
+            if (std::fabs(v-target) > kV2CalMaxResidualV) {
+                detail(15, v, target-kV2CalMaxResidualV, target+kV2CalMaxResidualV, j);
+                return fail(V2CalFailure::Verification);
+            }
+        }
+        if (!io.AllOff() || !io.Write(j, 2048)) return fail(V2CalFailure::Io);
+        r.stage = 6;
+    }
+    report.jack = 255;
+    if (!V2CalRecordPlausible(out)) return fail(V2CalFailure::Fit);
+    out.magic = kV2CalMagic;
+    out.schema_version = kV2CalSchemaVersion;
+    out.crc32 = V2CalComputeCrc(out);
+    return true;
+}
+
+} // namespace alchemy
+
+// Host tests exercise the same engine above without linking ADC/LED/QSPI HAL.
+#if !defined(ALCHEMY_CALIBRATION_HOST_TEST)
 #include "alchemy/hw/v2_factory_cal.h"
 
 #include <cmath>
@@ -39,22 +221,14 @@
 
 #include "alchemy/hw/alchemy_lab_v2.h"
 #include "alchemy/hw/v2_calibration.h"
+#include "alchemy/hw/v2_calibration_runner.h"
 
 namespace alchemy {
 
 namespace {
 
-/* ── Tunables (bench-validated values from Phase 1) ───────────────────── */
-
-constexpr uint32_t kSamplesPerPoint = 500u;
-constexpr uint32_t kSweepPoints     = 17u;
-constexpr uint32_t kSweepTrim       = 2u;     /* fit excludes N pts each end */
-constexpr uint32_t kDacSettleMs     = 5u;
-constexpr double   kSatResidualV    = 0.100;  /* saturation threshold        */
-
-constexpr uint32_t kVrefintCalAddr  = 0x1FF1E860u;  /* H750 factory word    */
-constexpr float    kVrefintCalVdda  = 3.30f;        /* condition of the word */
-constexpr double   kAdcMaxCode      = 65535.0;
+constexpr uint32_t kVrefintCalAddr = 0x1FF1E860u;
+constexpr float kVrefintCalVdda = 3.30f;
 
 /* ── Bare-metal one-shot ADC (ADC1 jacks + ADC3 VREFINT) ─────────────── */
 
@@ -121,7 +295,10 @@ bool AdcReadSingle(ADC_HandleTypeDef& h, uint32_t channel, uint16_t& out)
 {
     h.Instance->SQR1 = ((channel & 0x1Fu) << ADC_SQR1_SQ1_Pos);
     if (HAL_ADC_Start(&h) != HAL_OK)                  return false;
-    if (HAL_ADC_PollForConversion(&h, 100) != HAL_OK) return false;
+    if (HAL_ADC_PollForConversion(&h, 10) != HAL_OK) {
+        HAL_ADC_Stop(&h);
+        return false;
+    }
     out = static_cast<uint16_t>(HAL_ADC_GetValue(&h));
     HAL_ADC_Stop(&h);
     return true;
@@ -140,45 +317,11 @@ bool ReadVrefintRaw(uint16_t& out)
     return AdcReadSingle(s_hadc3, ch, out);
 }
 
-/* ── Stats + fit ─────────────────────────────────────────────────────── */
-
-bool SampleMean(bool (*reader)(uint8_t, uint16_t&), uint8_t arg,
-                uint32_t n, double& mean_out)
-{
-    double sum = 0.0;
-    for (uint32_t i = 0; i < n; ++i)
-    {
-        uint16_t code = 0;
-        if (!reader(arg, code)) return false;
-        sum += static_cast<double>(code);
-    }
-    mean_out = sum / static_cast<double>(n);
-    return true;
-}
-
-bool VrefintReader(uint8_t /*unused*/, uint16_t& out) { return ReadVrefintRaw(out); }
-
-void LinearFit(const double* x, const double* y, uint32_t n,
-               double& a, double& b)
-{
-    double sx = 0.0, sy = 0.0, sxx = 0.0, sxy = 0.0;
-    for (uint32_t i = 0; i < n; ++i)
-    {
-        sx += x[i];  sy += y[i];
-        sxx += x[i] * x[i];
-        sxy += x[i] * y[i];
-    }
-    const double denom = static_cast<double>(n) * sxx - sx * sx;
-    a = (denom == 0.0) ? 0.0
-                       : (static_cast<double>(n) * sxy - sx * sy) / denom;
-    b = (sy - a * sx) / static_cast<double>(n);
-}
-
 /* ── DAC + routing helpers (drive the board's own members) ───────────── */
 
 uint16_t s_mcp_shadow[4] = { 2048u, 2048u, 2048u, 2048u };
 
-void WriteJackDac(AlchemyLabV2& hw, uint8_t jack, uint16_t code)
+bool WriteJackDac(AlchemyLabV2& hw, uint8_t jack, uint16_t code)
 {
     code = static_cast<uint16_t>(code & 0x0FFFu);
     const DacRoute& r = kDacRouting[jack];
@@ -186,21 +329,21 @@ void WriteJackDac(AlchemyLabV2& hw, uint8_t jack, uint16_t code)
     if (src < 4u)
     {
         s_mcp_shadow[src] = code;
-        hw.dac.WriteAll(s_mcp_shadow[0], s_mcp_shadow[1],
-                        s_mcp_shadow[2], s_mcp_shadow[3]);
-        hw.dac.PulseLdac(hw.expander, kPca9557IoLdac);
+        return hw.dac.WriteAll(s_mcp_shadow[0], s_mcp_shadow[1],
+                              s_mcp_shadow[2], s_mcp_shadow[3])
+            && hw.dac.PulseLdac(hw.expander, kPca9557IoLdac);
     }
     else
     {
-        hw.stm_dac.WriteValue((src == 4u) ? daisy::DacHandle::Channel::ONE
+        return hw.stm_dac.WriteValue((src == 4u) ? daisy::DacHandle::Channel::ONE
                                           : daisy::DacHandle::Channel::TWO,
-                              code);
+                              code) == daisy::DacHandle::Result::OK;
     }
 }
 
-void Dg411AllOff(AlchemyLabV2& hw)
+bool Dg411AllOff(AlchemyLabV2& hw)
 {
-    hw.expander.WriteOutputs(kPca9557OutputBoot);
+    return hw.expander.WriteOutputs(kPca9557OutputBoot);
 }
 
 /* ── QSPI persist (same dance as the bench cal_writer) ───────────────── */
@@ -222,28 +365,24 @@ daisy::QSPIHandle::Config QspiConfig(daisy::QSPIHandle::Config::Mode mode)
 
 bool PersistToQspi(AlchemyLabV2& hw, const V2Calibration& cal)
 {
+    if (cal.magic != kV2CalMagic || cal.schema_version != kV2CalSchemaVersion
+        || cal.vdda_source != kV2VddaMeasured || !V2CalRecordPlausible(cal)
+        || cal.crc32 != V2CalComputeCrc(cal)) return false;
     auto& qspi = hw.seed.qspi;
-
-    auto indirect = QspiConfig(daisy::QSPIHandle::Config::Mode::INDIRECT_POLLING);
-    if (qspi.Init(indirect) != daisy::QSPIHandle::Result::OK) return false;
-
-    const uint32_t end = kV2CalQspiAddr + kV2CalQspiSectorSize - 1u;
-    if (qspi.Erase(kV2CalQspiAddr, end) != daisy::QSPIHandle::Result::OK)
-        return false;
-
-    if (qspi.Write(kV2CalQspiAddr, sizeof(cal),
-                   reinterpret_cast<uint8_t*>(
-                       const_cast<V2Calibration*>(&cal)))
-        != daisy::QSPIHandle::Result::OK)
-        return false;
-
-    auto mapped = QspiConfig(daisy::QSPIHandle::Config::Mode::MEMORY_MAPPED);
-    if (qspi.Init(mapped) != daisy::QSPIHandle::Result::OK) return false;
-
-    /* Verify through the freshly-invalidated memory-mapped alias. */
+    const auto indirect = QspiConfig(daisy::QSPIHandle::Config::Mode::INDIRECT_POLLING);
+    const auto mapped = QspiConfig(daisy::QSPIHandle::Config::Mode::MEMORY_MAPPED);
+    const bool init_ok = qspi.Init(indirect) == daisy::QSPIHandle::Result::OK;
+    bool ok = init_ok;
+    if (ok) ok = qspi.Erase(kV2CalQspiAddr, kV2CalQspiAddr + kV2CalQspiSectorSize)
+                     == daisy::QSPIHandle::Result::OK;
+    if (ok) ok = qspi.Write(kV2CalQspiAddr, sizeof(cal),
+                           reinterpret_cast<uint8_t*>(const_cast<V2Calibration*>(&cal)))
+                     == daisy::QSPIHandle::Result::OK;
+    // Always attempt to restore the mapped mode, including erase/write failure.
+    const bool mapped_ok = qspi.Init(mapped) == daisy::QSPIHandle::Result::OK;
+    if (!ok || !mapped_ok) return false;
     V2Calibration readback{};
-    if (!V2CalLoadFromQspi(readback)) return false;
-    return std::memcmp(&cal, &readback, sizeof(cal)) == 0;
+    return V2CalLoadFromQspi(readback) && std::memcmp(&cal, &readback, sizeof(cal)) == 0;
 }
 
 /* ── Panel feedback ──────────────────────────────────────────────────── */
@@ -324,6 +463,7 @@ void RingProgress(AlchemyLabV2& hw, uint8_t ring, uint8_t n_lit)
      * room. The previous QSPI record is only touched after every sweep
      * succeeded, so failure here leaves earlier calibration intact
      * (a torn QSPI write fails CRC on next boot → clean fallback). */
+    Dg411AllOff(hw); // Best effort; a failed expander cannot guarantee disconnection.
     bool phase = false;
     while (true)
     {
@@ -341,129 +481,78 @@ void RingProgress(AlchemyLabV2& hw, uint8_t ring, uint8_t n_lit)
 
 /* ── The procedure ───────────────────────────────────────────────────── */
 
-bool RunProcedure(AlchemyLabV2& hw, V2Calibration& out)
+class FactoryIo final : public V2CalIo
 {
-    std::memset(&out, 0, sizeof(out));
-    out.magic          = kV2CalMagic;
-    out.schema_version = kV2CalSchemaVersion;
-
-    /* Pass 1: VREFINT → VDDA.  Panel: button pairs amber. */
-    AllButtons(hw, kLedAmber);
-    LedsShow(hw);
-    daisy::System::Delay(10);   /* let the frame finish before sampling */
-
-    double vrefint_mean = 0.0;
-    if (!SampleMean(VrefintReader, 0u, kSamplesPerPoint, vrefint_mean))
-        return false;
-    const uint16_t cal_word =
-        *reinterpret_cast<const volatile uint16_t*>(kVrefintCalAddr);
-    const double vdda = static_cast<double>(kVrefintCalVdda)
-                        * static_cast<double>(cal_word) / vrefint_mean;
-    if (vdda >= 3.0 && vdda <= 3.6)
+  public:
+    explicit FactoryIo(AlchemyLabV2& hw) : hw_(hw) {}
+    bool Reference(float& vdda) override
     {
-        out.vdda_at_cal = static_cast<float>(vdda);
-        out.vdda_source = kV2VddaMeasured;
+        const uint16_t word = *reinterpret_cast<const volatile uint16_t*>(kVrefintCalAddr);
+        if (word == 0 || word == 65535) return false;
+        V2CalSamples samples;
+        for (uint32_t i = 0; i < 500; ++i) {
+            uint16_t raw;
+            if (!ReadVrefintRaw(raw) || raw == 0 || raw == 65535) return false;
+            samples.Add(raw);
+        }
+        if (samples.StdDev() > samples.mean * 0.01) return false;
+        vdda = kVrefintCalVdda * word / samples.mean;
+        return V2CalVddaValid(vdda);
     }
-    else
+    bool AllOff() override { return Dg411AllOff(hw_); }
+    bool Write(uint8_t j, uint16_t code) override { return WriteJackDac(hw_, j, code); }
+    bool Connect(uint8_t j) override
     {
-        out.vdda_at_cal = kV2VddaDesign;
-        out.vdda_source = kV2VddaAssumed;
+        return hw_.expander.SetOutputBit(kDacRouting[j].select_io, kDg411OnLevel);
     }
-
-    /* Pass 2: per-jack ADC zero (jacks open, DG411s open).
-     * Panel: rings fill blue one-by-one — a wave across the panel. */
-    Dg411AllOff(hw);
-    daisy::System::Delay(20);
-    for (uint8_t j = 0; j < kV2CalNumJacks; ++j)
+    bool Capture(uint8_t j, uint32_t n, V2CalSamples& out) override
     {
-        double mean = 0.0;
-        if (!SampleMean(ReadJackRaw, j, kSamplesPerPoint, mean)) return false;
-        out.jack[j].adc_zero_code = static_cast<uint16_t>(mean + 0.5);
-
-        RingSolid(hw, j, kLedBlue);
-        LedsShow(hw);
-        daisy::System::Delay(5);  /* frame DMA done before next sample burst */
+        out = {};
+        for (uint32_t i = 0; i < n; ++i) {
+            uint16_t raw;
+            if (!ReadJackRaw(j, raw)) return false;
+            out.Add(raw);
+        }
+        return true;
     }
-
-    /* Pass 3: DAC sweep per jack.
-     * Panel: the active jack's ring fills amber point-by-point (bright
-     * head pixel); each finished jack holds dim green. Frames go out
-     * during the DAC settle window so the LED data line is quiet while
-     * the ADC samples. */
-    const double vdda_d = static_cast<double>(out.vdda_at_cal);
-    for (uint8_t j = 0; j < kV2CalNumJacks; ++j)
+    bool Wait(uint32_t ms) override { daisy::System::Delay(ms); return true; }
+    void Progress(uint8_t j, uint8_t step) override
     {
         s_fail_jack = j;
-        Dg411AllOff(hw);
-        if (!hw.expander.SetOutputBit(kDacRouting[j].select_io, kDg411OnLevel))
-            return false;
-
-        const double v_pin_zero =
-            vdda_d * static_cast<double>(out.jack[j].adc_zero_code) / kAdcMaxCode;
-
-        double xs[kSweepPoints] = {};
-        double ys[kSweepPoints] = {};
-        for (uint32_t k = 0; k < kSweepPoints; ++k)
-        {
-            const uint16_t code = static_cast<uint16_t>(
-                (k * 4095u + (kSweepPoints - 1u) / 2u) / (kSweepPoints - 1u));
-            WriteJackDac(hw, j, code);
-
-            const uint8_t fill = static_cast<uint8_t>(
-                ((k + 1u) * kLedsPerRing) / kSweepPoints);
-            RingProgress(hw, j, fill);
-            LedsShow(hw);                       /* ~3 ms DMA…           */
-            daisy::System::Delay(kDacSettleMs); /* …inside 5 ms settle  */
-
-            double mean = 0.0;
-            if (!SampleMean(ReadJackRaw, j, kSamplesPerPoint, mean))
-            {
-                Dg411AllOff(hw);
-                return false;
-            }
-            const double v_pin = vdda_d * mean / kAdcMaxCode;
-            xs[k] = static_cast<double>(code);
-            ys[k] = (v_pin_zero - v_pin)
-                    / static_cast<double>(kV2CvInGainDesign);
-        }
-
-        double a = 0.0, b = 0.0;
-        LinearFit(xs + kSweepTrim, ys + kSweepTrim,
-                  kSweepPoints - 2u * kSweepTrim, a, b);
-        if (a == 0.0) { Dg411AllOff(hw); return false; }
-
-        /* Usable range: widen from the trimmed region until saturation. */
-        const uint32_t last = kSweepPoints - 1u;
-        uint32_t lo = kSweepTrim;
-        while (lo > 0u
-               && std::fabs(ys[lo - 1u] - (a * xs[lo - 1u] + b)) <= kSatResidualV)
-            --lo;
-        uint32_t hi = last - kSweepTrim;
-        while (hi < last
-               && std::fabs(ys[hi + 1u] - (a * xs[hi + 1u] + b)) <= kSatResidualV)
-            ++hi;
-
-        out.jack[j].dac_gain_v_per_code = static_cast<float>(a);
-        out.jack[j].dac_offset_v        = static_cast<float>(b);
-        out.jack[j].dac_min_linear_code =
-            (lo == 0u) ? 0u : static_cast<uint16_t>(xs[lo] + 0.5);
-        out.jack[j].dac_max_linear_code =
-            (hi == last) ? 4095u : static_cast<uint16_t>(xs[hi] + 0.5);
-
-        /* Park this DAC at mid-scale and disconnect before the next jack;
-         * its ring holds dim green = done. */
-        WriteJackDac(hw, j, 2048u);
-        RingSolid(hw, j, kLedGreenHold);
-        LedsShow(hw);
+        if (!step) RingSolid(hw_, j, kLedBlue);
+        else RingProgress(hw_, j, (step * kLedsPerRing) / 17);
+        LedsShow(hw_);
+        daisy::System::Delay(5); // Quiet LED DMA before ADC acquisition.
     }
-    Dg411AllOff(hw);
-    s_fail_jack = 0xFFu;
+  private:
+    AlchemyLabV2& hw_;
+};
 
-    out.crc32 = V2CalComputeCrc(out);
-    return true;
+bool RunProcedure(AlchemyLabV2& hw, V2Calibration& out)
+{
+    FactoryIo io(hw);
+    V2CalReport report;
+    AllButtons(hw, kLedAmber);
+    LedsShow(hw);
+    daisy::System::Delay(10);
+    const bool ok = V2RunCalibration(io, false, out, report);
+    s_fail_jack = report.jack;
+    return ok;
 }
 
 }  // namespace
+
+bool V2CalibrationAdcInit() { return CalAdcInit(); }
+bool V2CalibrationReadJack(uint8_t jack, uint16_t& raw)
+{
+    return jack < kNumCvInputs && ReadJackRaw(jack, raw);
+}
+bool V2CalibrationReadReference(uint16_t& raw) { return ReadVrefintRaw(raw); }
+
+bool V2PersistCalibration(AlchemyLabV2& hw, const V2Calibration& cal)
+{
+    return PersistToQspi(hw, cal);
+}
 
 /* ── Public entry points ─────────────────────────────────────────────── */
 
@@ -504,7 +593,7 @@ bool V2FactoryCalRequested()
     if (!hw.expander.Init(hw.i2c, kPca9557Address))           FailForever(hw);
     if (!hw.dac.Init(hw.i2c, kMcp4728AddrFirst, kMcp4728AddrLast))
         FailForever(hw);
-    hw.dac.PulseLdac(hw.expander, kPca9557IoLdac);
+    if (!hw.dac.PulseLdac(hw.expander, kPca9557IoLdac)) FailForever(hw);
 
     daisy::DacHandle::Config dac_cfg;
     dac_cfg.target_samplerate = 48000u;
@@ -514,8 +603,9 @@ bool V2FactoryCalRequested()
     dac_cfg.buff_state        = daisy::DacHandle::BufferState::ENABLED;
     if (hw.stm_dac.Init(dac_cfg) != daisy::DacHandle::Result::OK)
         FailForever(hw);
-    hw.stm_dac.WriteValue(daisy::DacHandle::Channel::ONE, 2048u);
-    hw.stm_dac.WriteValue(daisy::DacHandle::Channel::TWO, 2048u);
+    if (hw.stm_dac.WriteValue(daisy::DacHandle::Channel::ONE, 2048u) != daisy::DacHandle::Result::OK
+        || hw.stm_dac.WriteValue(daisy::DacHandle::Channel::TWO, 2048u) != daisy::DacHandle::Result::OK)
+        FailForever(hw);
 
     if (!CalAdcInit()) FailForever(hw);
 
@@ -564,3 +654,5 @@ bool V2FactoryCalRequested()
 }
 
 } // namespace alchemy
+
+#endif

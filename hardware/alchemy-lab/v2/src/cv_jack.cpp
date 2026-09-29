@@ -8,6 +8,8 @@
 #include "alchemy/hw/mcp4728.h"
 #include "alchemy/hw/pca9557.h"
 
+#include <cmath>
+
 namespace alchemy {
 
 namespace {
@@ -121,6 +123,10 @@ uint16_t CvJack::VoltsToCode(float volts) const
 
 bool CvJack::SetVolts(float volts)
 {
+    /* Keep an invalid codec command from replacing the last valid target. */
+    if (backend_ == Backend::CodecOut && !std::isfinite(volts))
+        return false;
+
     target_v_ = volts;
 
     if (backend_ == Backend::CodecOut)

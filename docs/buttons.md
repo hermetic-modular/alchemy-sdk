@@ -149,6 +149,12 @@ Modules using the bank do not call `Host::Buttons()`, so the legacy
 root `buttons` array (§5.3) is absent and nothing renders twice. The
 legacy array remains supported for metadata-only firmware.
 
+`Host::Buttons()` includes explicitly declared `.Tap()` and `.Hold()`
+gestures alongside legacy `.Action()` entries in each root button's
+`actions` array. Each entry includes its label and any `.GestureHelp()` text.
+This registration exports metadata only; gesture handling still needs
+the bank or the firmware's own button handling.
+
 ## Loop-less use
 
 Without a `ControlLoop`, wire explicitly and drive the three phases

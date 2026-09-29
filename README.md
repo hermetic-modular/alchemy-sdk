@@ -116,7 +116,7 @@ There are ten jacks total. The middle six are field programmable to be CV in or 
 
 See [`cv_playground.cpp`](examples/cv_playground/cv_playground.cpp) for all of these in practice.
 
-**J1, J2** are codec audio inputs, AC-coupled. AC coupling blocks DC so absolute voltage can't be read, but rising edges pass cleanly, allowing for clocks and triggers. Use `RisingEdge()`. A use case may be you have a module that does not process input audio, in which case you could use these jacks for trigger inputs, to free up the other switchable jacks. Theoretically you could also set a low trigger threshold and get gate signals up to the length it takes the AC cap to debias the DC signal - some testing is required to see how long these gates could be.
+**J1, J2** are AC-coupled audio inputs with automatic trigger detection, no threshold setup. Call `hw.StartAudio(callback)`, or `hw.StartAudio()` for triggers alone, then read `RisingEdge()` in `OnPoll`. Each read clears the latch; multiple arrivals coalesce. These inputs detect fast positive transitions, not held gates or absolute voltage.
 
 **J3–J8** are the field programmable jacks. They can be mode changed with `EnableCvOutput()` which closes an analog switch to route the backing DAC (MCP4728 on J3–J6, STM DAC1 on J7–J8); `DisableCvOutput()` disconnects the DAC. This can be set at boot or changed live for unique firmware development opportunities.
 
@@ -126,8 +126,8 @@ See [`cv_playground.cpp`](examples/cv_playground/cv_playground.cpp) for all of t
 
 | Jack | Type | Output bits | Output latency | Input bits | Input latency | How to change |
 |------|------|-------------|----------------|------------|---------------|---------------|
-| J1 | Codec In | N/A | N/A | 1 | audio block | `SetTriggerThreshold(v)` |
-| J2 | Codec In | N/A | N/A | 1 | audio block | `SetTriggerThreshold(v)` |
+| J1 | Codec In | N/A | N/A | 1 | audio block | automatic |
+| J2 | Codec In | N/A | N/A | 1 | audio block | automatic |
 | J3 | Ext Dac | 12 | ~70 µs (I²C) | 16 | audio rate | `Enable/DisableCvOutput()` |
 | J4 | Ext Dac | 12 | ~70 µs (I²C) | 16 | audio rate | `Enable/DisableCvOutput()` |
 | J5 | Ext Dac | 12 | ~70 µs (I²C) | 16 | audio rate | `Enable/DisableCvOutput()` |

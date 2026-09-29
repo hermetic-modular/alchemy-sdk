@@ -26,25 +26,6 @@
  * the 0 V rest point.  Using CvEdge's defaults for a gate produces the
  * classic "+5 V triggers, 0 V holds forever, only −5 V releases"
  * failure mode.
- *
- * Typical use (inside Module::PollCvGates at 1 ms cadence):
- *
- *   // Clock / tap input — feed alchemy::ClockFollower for phase-aware
- *   // (bar / beat / sample-accurate gate) work, or alchemy::ClockPll
- *   // if you only need a BPM number:
- *   alchemy::CvEdge clock_;
- *   clock_.Init(1);
- *   const uint32_t rising = clock_.Tick(cv, nc, daisy::System::GetUs());
- *   if (rising & (1u << kClockChan))
- *       follower_.OnPulse(clock_.LastRiseUs(kClockChan));
- *
- *   // Envelope gate input:
- *   alchemy::CvGate gate_;
- *   gate_.Init(1);
- *   gate_.Tick(cv, nc, daisy::System::GetUs());
- *   engine_.SetGate(gate_.Level(kGateChan));
- *
- * No global state; instances are fully independent.
  */
 
 #pragma once

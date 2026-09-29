@@ -124,8 +124,9 @@ class MusicalClock
     /** Apply any deferred transport, integrate `ticks_per_us * dt`, and
      *  fire subdivision events for every integer tick that crossed.
      *  Call once per control poll (≈ 1 ms).  `now_us` is a microsecond
-     *  timestamp from the platform monotonic counter (32-bit wrap-safe
-     *  internally). */
+     *  timestamp wrapping modulo 2^32 MICROSECONDS, in the same epoch as
+     *  the follower's pulse timestamps. Use ControlLoop::PollTimeUs() or
+     *  TickTimebase; Daisy's System::GetUs() wraps early and is unsuitable. */
     void Tick(uint32_t now_us);
 
     /* ── Transport (deferred; applied at the top of the next Tick) ───── */

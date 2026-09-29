@@ -287,9 +287,8 @@ constexpr uint8_t kMcp4728NumChannels = 4u;
  *   J1 ↔ in[0]   J9  ↔ out[0]
  *   J2 ↔ in[1]   J10 ↔ out[1]
  *
- * The standard Daisy codec analog stages map ±5 V at the panel ↔ ±1.0 in
- * normalised sample units. Used by the audio shim to convert SetVolts()
- * targets to codec samples and to threshold trigger inputs.
+ * J9/J10 use the fixed, inverting Seed2 DFM DC output transfer in
+ * v2_codec_cv.h. Codec samples are not the normalized CvJack::Value().
  */
 constexpr uint8_t kNumTriggerJacks = 2u;  /* J1, J2 */
 constexpr uint8_t kNumCodecCvOuts  = 2u;  /* J9, J10 */
@@ -300,6 +299,7 @@ constexpr uint8_t kCodecInChJ2  = 1u;
 constexpr uint8_t kCodecOutChJ9  = 0u;
 constexpr uint8_t kCodecOutChJ10 = 1u;
 
+/* Legacy nominal CV range; retained for source compatibility. */
 constexpr float kCodecJackFullScaleVolts = 5.0f;
 
 extern const HardwareLayout kAlchemyLabV2Layout;

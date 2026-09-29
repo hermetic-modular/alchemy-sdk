@@ -444,6 +444,8 @@ void RingFrame::BaseZone(const SelectorDesc& desc, uint8_t zone)
             active_ = SpanLeds{k, k, static_cast<float>(k),
                                static_cast<float>(k)};
     }
+    if (zone < 16u && (desc.avail_mask & static_cast<uint16_t>(1u << zone)))
+        Set(DistributedZonePosition(zone, desc.num_zones, n_), desc.active_color);
 }
 
 /* ── Pip overlay ─────────────────────────────────────────────────────────── */

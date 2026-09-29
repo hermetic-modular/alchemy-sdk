@@ -91,12 +91,15 @@ class DescriptorBuilder
     /** One field per (page, pot); disp_json may be nullptr for a plain
      *  percent readout.  def is captured from the pager's stored value.
      *  help/see are the manual prose keys (protocol §5, additive) — see
-     *  refs resolve + validate at Finish(). */
+     *  refs resolve + validate at Finish(). hidden adds "hidden":true
+     *  for presentation only; the field and its storage remain intact.
+     *  Visible fields omit the key, preserving existing descriptors. */
     bool PagerField(uint8_t page, uint8_t pot,
                     const char* field_id, const char* name,
                     const char* disp_json,
                     const char* help = nullptr,
-                    const SeeRef* see = nullptr, uint8_t num_see = 0u);
+                    const SeeRef* see = nullptr, uint8_t num_see = 0u,
+                    bool hidden = false);
     /** Optional alternate position→field mapping (row-major page-major
      *  array of pages×pots field ids), active when the enum field named
      *  @p layout_from selects zone 1.  @p count must equal

@@ -69,7 +69,7 @@ inline constexpr const char* kBrightness =
 class Manual
 {
   public:
-    static constexpr uint8_t kMaxSections = 8u;
+    static constexpr uint8_t kMaxSections = 16u;
 
     struct SectionDecl
     {

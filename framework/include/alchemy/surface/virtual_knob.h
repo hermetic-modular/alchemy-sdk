@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <initializer_list>
 #include "alchemy/hardware_types.h"        /* ArcGeometry */
+#include "alchemy/control/selector.h"
 #include "alchemy/led/anim_desc.h"         /* ParamSlot, ArcStyle, FillAnim */
 #include "alchemy/led/panel.h"             /* LedPanel, LedPanel::Rgb */
 #include "alchemy/surface/cv_source.h"
@@ -281,6 +282,7 @@ class VirtualKnob
     VirtualKnob& Linear(float min, float max)
     {
         xform_     = Xform::Linear;
+        slot_.selector_value_zones = 0u;
         xform_min_ = min;
         xform_max_ = max;
         return *this;
@@ -290,17 +292,22 @@ class VirtualKnob
     VirtualKnob& Exp(float min, float max)
     {
         xform_     = Xform::Exp;
+        slot_.selector_value_zones = 0u;
         xform_min_ = min;
         xform_max_ = max;
         return *this;
     }
 
-    /** Discrete N-zone selector. .Value() returns an integer cast to float in [0, N). */
+    /** Discrete equal-width selector. Value() returns an integer cast to
+     *  float in [0, N); zero zones is treated as one. A SelectorRing uses
+     *  this count, independent of builder order, so its LED agrees with Value(). */
     VirtualKnob& Selector(uint8_t num_zones)
     {
         xform_     = Xform::Selector;
         xform_min_ = 0.f;
-        xform_max_ = static_cast<float>(num_zones);
+        const uint8_t zones = num_zones ? num_zones : 1u;
+        xform_max_ = static_cast<float>(zones);
+        slot_.selector_value_zones = zones;
         return *this;
     }
 
@@ -555,12 +562,8 @@ class VirtualKnob
 
     float SelectorTransform(float n) const
     {
-        const float upper = xform_max_;            /* num_zones */
-        float       z     = n * upper;
-        if (z >= upper)         z = upper - 1.f;
-        else if (z < 0.f)       z = 0.f;
-        else                    z = static_cast<float>(static_cast<int>(z));
-        return z;
+        return static_cast<float>(SelectorIndex(n,
+                                     static_cast<uint8_t>(xform_max_)));
     }
 
     /* Inline a^b without dragging <cmath> into a hot ISR path on -O0 builds.

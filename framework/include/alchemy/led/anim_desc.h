@@ -138,6 +138,10 @@ struct ParamSlot
     SelectorDesc  selector  = SlotDefaultSelector();  ///< Selector styling.
     GradientDesc  gradient;                           ///< Gradient snap points.
     BottomPipDesc pip;                                ///< Bottom-pip styling.
+    /** Nonzero for a value-backed selector: overrides the ring's zone
+     *  count and selects equal-width bins. Zero preserves the standalone
+     *  ring's geometry-dependent selection. Set by VirtualKnob::Selector. */
+    uint8_t selector_value_zones = 0u;
 };
 
 } // namespace alchemy

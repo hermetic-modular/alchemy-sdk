@@ -55,6 +55,7 @@
 #pragma once
 
 #include <cstdint>
+#include "alchemy/control/tick_timebase.h"
 #include "alchemy/hw/alchemy_lab_layout.h"   /* kNumPots, kNumCvInputs */
 #include "alchemy/led/anims/clip_indicator.h"
 #include "alchemy/led/perf_renderer.h"
@@ -187,6 +188,8 @@ class ControlLoop
      */
     ControlLoop& OnPoll       (PollFn   fn) { on_poll_        = fn; return *this; }
 
+    uint32_t PollTimeUs() const { return poll_timebase_.NowUs(); }
+
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 
     /** Run one frame: poll → update → render → show. */
@@ -226,6 +229,7 @@ class ControlLoop
     AlchemyLab*   hw_;
     uint32_t      frame_ms_;
     uint32_t      poll_ms_;
+    TickTimebase  poll_timebase_;
 
     /* Per-frame buffers. */
     float   phys_[kNumPots]     = {};
