@@ -104,6 +104,59 @@ bool SameRgb(LedPanel::Rgb a, LedPanel::Rgb b)
     return a.r == b.r && a.g == b.g && a.b == b.b;
 }
 
+/* ── Startup defaults: arm catch from the first real snapshot ──────── */
+
+void TestStartupSeedCatch()
+{
+    NavRig rig;
+    rig.phys[0] = 0.8f;
+    rig.phys[1] = 0.1f;
+    const float unprimed[kPots] = {};
+    Pager pager(2, kPots);
+    pager.SetStored(0, 0, 0.25f, unprimed);
+    pager.SetStored(0, 1, 0.00f, unprimed);
+    pager.SetStored(1, 0, 0.25f, unprimed);
+
+    for (unsigned frame = 0; frame < 10; ++frame) rig.Frame(pager);
+    NCHECK_NEAR(pager.Stored(0, 0), 0.25f, 1e-6f);
+    NCHECK_NEAR(pager.Stored(0, 1), 0.00f, 1e-6f);
+    NCHECK_NEAR(pager.Stored(1, 0), 0.25f, 1e-6f);
+    NCHECK(!pager.Caught(0));
+    NCHECK(!pager.Caught(1));
+
+    rig.phys[0] = 0.65f;
+    rig.Frame(pager);
+    NCHECK_NEAR(pager.Value(0), 0.25f, 1e-6f);
+    rig.phys[0] = 0.20f;
+    rig.Frame(pager);
+    NCHECK(pager.Caught(0));
+    NCHECK_NEAR(pager.Value(0), 0.20f, 1e-6f);
+    pager.GoToPage(1, rig.phys);
+    NCHECK(!pager.Caught(0));
+    NCHECK_NEAR(pager.Value(0), 0.25f, 1e-6f);
+
+    // Later writes retain the immediate runtime catch contract.
+    pager.SetStored(1, 0, rig.phys[0], rig.phys);
+    NCHECK(pager.Caught(0));
+    pager.SetStored(1, 0, 0.70f, rig.phys);
+    NCHECK(!pager.Caught(0));
+    rig.Frame(pager);
+    NCHECK_NEAR(pager.Value(0), 0.70f, 1e-6f);
+
+    // No seeds: preserve the normal first-page physical-follow behavior.
+    Pager untouched(1, kPots);
+    rig.Frame(untouched);
+    NCHECK_NEAR(untouched.Value(0), rig.phys[0], 1e-6f);
+
+    // A default near the unprimed reading must not be rounded to it.
+    Pager near_zero(1, kPots);
+    near_zero.SetStored(0, 0, 0.002f, unprimed);
+    NCHECK_NEAR(near_zero.Stored(0, 0), 0.002f, 1e-6f);
+    rig.Frame(near_zero);
+    NCHECK_NEAR(near_zero.Value(0), 0.002f, 1e-6f);
+    NCHECK(!near_zero.Caught(0));
+}
+
 /* ── Classic cycle: the pre-binding contract, unchanged ────────────── */
 
 void TestClassicCycle()
@@ -900,6 +953,7 @@ void TestLockConsumeIdentity()
 
 int RunPagerNavTests(int& checks, int& failures)
 {
+    TestStartupSeedCatch();
     TestClassicCycle();
     TestHoldClaim();
     TestGatePoisoning();
