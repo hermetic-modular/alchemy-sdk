@@ -40,6 +40,8 @@
 namespace alchemy {
 namespace hostlink {
 
+class FastValues;
+
 class HostLink
 {
   public:
@@ -93,6 +95,8 @@ class HostLink
      */
     bool Extend(IHostlinkExtension& ext);
 
+    void SetFastValues(const FastValues& values) { fast_ = &values; }
+
     /** Pump the transport, then parse + execute pending requests.
      *  Call from the control loop (1 ms cadence recommended). */
     void Poll(uint32_t now_ms);
@@ -125,6 +129,7 @@ class HostLink
     void Send(FrameWriter& w);
     void AbortStage() { stage_open_ = false; stage_recv_ = 0u; }
 
+    const FastValues* fast_ = nullptr;
     IHostTransport& transport_;
     Presets*        presets_ = nullptr;
     Info            info_;
