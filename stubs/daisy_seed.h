@@ -70,7 +70,8 @@ struct AdcHandle {
 
 /* ── QSPIHandle ───────────────────────────────────────────────────────── */
 
-struct QSPIHandle {
+class QSPIHandle {
+  public:
     enum class Result { OK, ERR };
     Result Erase(uint32_t, uint32_t)              { return Result::OK; }
     Result Write(uint32_t, uint32_t, uint8_t*)    { return Result::OK; }
@@ -122,6 +123,11 @@ struct Switch {
 /* ── System ───────────────────────────────────────────────────────────── */
 
 struct System {
+    enum class BootloaderMode { DAISY };
+    static void ResetToBootloader(BootloaderMode) {}
+    static uint32_t& TickForUnitTest() { static uint32_t tick = 100; return tick; }
+    static uint32_t GetTick()      { return TickForUnitTest(); }
+    static uint32_t GetTickFreq()  { return 1000000; }
     static uint32_t GetNow()       { return 0; }
     static uint32_t GetUs()        { return 0; }
     static void     Delay(uint32_t) {}

@@ -1,8 +1,3 @@
-/**
- * @file clock_follower.cpp
- * @brief External-clock PI-PLL.  See clock_follower.h.
- */
-
 #include "alchemy/control/clock_follower.h"
 
 #include <cassert>
@@ -38,10 +33,6 @@ void ClockFollower::Enable(uint32_t ext_ppqn)
     loss_announced_    = false;
     ring_tail_         = ring_head_; /* discard pulses from before Enable */
 
-    /* Stop the NCO and zero its rate so it does not free-run at the old
-     * internal tempo while waiting for first lock (azoth
-     * `extclock_enable`).  `SetSteered(true)` makes user `SetBpm` a
-     * no-op so it can't fight us. */
     nco_->SetSteered(true);
     nco_->Stop();
     nco_->SetTicksPerUs(0.0);
@@ -104,13 +95,17 @@ float ClockFollower::Bpm() const
 
 void ClockFollower::OnReset()
 {
-    /* Re-anchor the phase reference: the NCO has just snapped to
-     * master_tick=0/frac=0, so anchor there and zero the integrator so
-     * we don't immediately apply a corrective burst against the
-     * discontinuity. */
     last_pulse_tick_ = 0u;
     last_pulse_frac_ = 0.0;
     integrator_      = 0.0;
+}
+
+void ClockFollower::OnSeek()
+{
+    last_pulse_tick_ = nco_->MasterTick();
+    last_pulse_frac_ = nco_->FracTick();
+    integrator_ = 0.0;
+    if (locked_) SeedRateFromPeriod();
 }
 
 /* ── Pulse intake ──────────────────────────────────────────────────────── */
@@ -118,9 +113,6 @@ void ClockFollower::OnReset()
 void ClockFollower::OnPulse(uint32_t stamp_us)
 {
     if (!enabled_) return;
-    /* SPSC: this side owns head, `Update` owns tail; the volatile head
-     * store publishes the slot (single-core, in-order vs ISR).  Full ⇒
-     * drop — a ring-length stall exceeds the loss threshold anyway. */
     const uint32_t head = ring_head_;
     if (head - ring_tail_ >= kPulseRingSize) return;
     pulse_ring_[head % kPulseRingSize] = stamp_us;
@@ -147,9 +139,7 @@ bool ClockFollower::ConsumePulse(uint32_t stamp_us)
 
     if (dt > max_period_us_)
     {
-        /* Outside the validity window: treat as a restart, not a missed
-         * pulse.  Clear state, reseed from this pulse — same as the
-         * existing ClockPll behavior. */
+        // Use this pulse as the first observation of a new tempo.
         locked_            = false;
         loss_announced_    = false;
         valid_pulse_count_ = 1u;
@@ -208,7 +198,7 @@ void ClockFollower::Update(uint32_t now_us)
             period_est_us_ * static_cast<double>(kClockLossFactor);
         if (dt_since > 0 && static_cast<double>(dt_since) > thresh)
         {
-            HandleLoss(now_us);
+            HandleLoss();
             return;
         }
     }
@@ -225,9 +215,6 @@ void ClockFollower::Update(uint32_t now_us)
     const uint64_t mtick         = nco_->MasterTick();
     const double   frac_at_stamp = FracTickAt(last_pulse_stamp_);
 
-    /* Wrap-safe even past 2^64 ticks because the unsigned subtraction
-     * mods over 2^64; in practice master_tick_ tops out at ~6 trillion
-     * years at 96 PPQN / 300 BPM so this is theoretical. */
     const double delta = static_cast<double>(mtick - last_pulse_tick_)
                        + (frac_at_stamp - last_pulse_frac_);
     const double phase_err =
@@ -252,7 +239,6 @@ void ClockFollower::Update(uint32_t now_us)
 
     nco_->SetTicksPerUs(rate_per_sec * 1e-6);
 
-    /* Anchor for the next measurement. */
     last_pulse_tick_ = mtick;
     last_pulse_frac_ = frac_at_stamp;
 }
@@ -291,7 +277,8 @@ void ClockFollower::SeedRateFromPeriod()
         return;
     const double rate_per_sec = (static_cast<double>(nco_->Ppqn()) * 1e6)
                               / (static_cast<double>(ext_ppqn_) * period_est_us_);
-    nco_->SetTicksPerUs(rate_per_sec * 1e-6);
+    const double max_per_sec = static_cast<double>(kClockBpmMax) * nco_->Ppqn() / 60.0;
+    nco_->SetTicksPerUs(Clamp(rate_per_sec, 0.0, max_per_sec) * 1e-6);
 }
 
 void ClockFollower::AnchorPhase(uint32_t stamp_us)
@@ -300,7 +287,7 @@ void ClockFollower::AnchorPhase(uint32_t stamp_us)
     last_pulse_frac_ = FracTickAt(stamp_us);
 }
 
-void ClockFollower::HandleLoss(uint32_t /*now_us*/)
+void ClockFollower::HandleLoss()
 {
     /* All policies share: forget the pulse counter and the last-stamp
      * anchor (so the next pulse re-enters lock acquisition), preserve
@@ -316,14 +303,11 @@ void ClockFollower::HandleLoss(uint32_t /*now_us*/)
     switch (loss_policy_)
     {
         case ClockLossPolicy::Freewheel:
-            /* Keep last rate; NCO keeps integrating in time. */
             break;
         case ClockLossPolicy::Freeze:
-            /* Hold position by zeroing the rate.  Resume on re-lock. */
             nco_->SetTicksPerUs(0.0);
             break;
         case ClockLossPolicy::Stop:
-            /* Halt transport.  Consumer may collapse to dry. */
             nco_->Stop();
             break;
     }

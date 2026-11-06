@@ -1,32 +1,3 @@
-/**
- * @file alchemy/host_link/host_link.h
- * @brief HostLink — the module-side protocol engine (v1).
- *
- * Bridges a byte-stream transport (USB CDC in practice) to the Presets
- * store and the live managed state.  See docs/hostlink-protocol.md.
- *
- * Threading contract:
- *   - Poll() runs from the app's control loop (the 1 ms inner poll is
- *     ideal — each stop-and-wait round trip then costs ~1 ms of queuing).
- *     It pumps the transport, parses requests, and executes commands.
- *     All Presets/Serializable interaction happens here — the same
- *     thread that runs on-device save/load gestures, so host and panel
- *     operations serialize naturally.
- *   - The transport's receive side may run at interrupt level; it only
- *     fills its own ring buffer.
- *
- * HostLink never calls the audio callback and never writes engine state
- * directly.  It does, however, drive the SAME parameter producer the
- * front panel does: a LOAD_FROM_SLOT / live-audition applies a preset via
- * the app's normal per-frame "push params to engine" step.  Whatever
- * ISR/param synchronisation the app already relies on for on-panel knob
- * moves applies unchanged here — the only difference is that a host can
- * swap a whole parameter set at once (which a human turning one pot
- * cannot), so any pre-existing non-atomic param update becomes remotely,
- * and more sharply, inducible.  Apps that need glitch-free preset A/B
- * over the link should double-buffer their engine-param apply.
- */
-
 #pragma once
 
 #include <cstddef>
@@ -40,6 +11,8 @@
 namespace alchemy {
 namespace hostlink {
 
+// Poll on the thread that owns preset mutations. The transport may buffer incoming bytes in an ISR.
+// Publish a complete parameter snapshot to audio after applying a preset.
 class HostLink
 {
   public:
@@ -136,6 +109,7 @@ class HostLink
     uint8_t        uid_[12]  = {};
 
     FrameParser parser_;
+    uint32_t    read_generation_ = 0u;
     uint8_t     rx_buf_[128];              /* transport drain scratch  */
     uint8_t     dec_ [kMaxDecoded];        /* response, decoded        */
     uint8_t     wire_[kMaxWire];           /* response, COBS-encoded   */

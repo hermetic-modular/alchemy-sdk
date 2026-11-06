@@ -1,34 +1,3 @@
-/**
- * @file alchemy/host_link/descriptor.h
- * @brief DescriptorBuilder — renders the module's self-description JSON
- *        (see docs/hostlink-protocol.md §5) with drift guards.
- *
- * The builder derives byte offsets from the *same* introspection the
- * surfaces serialize with (Pager page/pot grid, Settings slot kinds), and
- * verifies at every stage that its arithmetic matches SerializedSize()
- * and the Presets Manage() order.  Any mismatch latches an error and
- * Finish() returns 0 — never a wrong descriptor.  The RenderDescriptor
- * wrapper (describe.h) degrades that to a minimal error descriptor so
- * hosts can show LastError()'s reason.
- *
- * Usage (app code, once at boot, after controls are declared and defaults
- * seeded — before BootLoad, or any time given a Defaults() image):
- *
- *   alchemy::hostlink::DescriptorBuilder db(buf, sizeof buf, presets);
- *   db.Begin({.id="echoa", .name="Echoa", .fw=..., .git=..., .sdk=..., .board="v1"});
- *   db.BeginPager("perf", pager);
- *   db.PagerField(0, 0, "d1.time", "Time 1", "{\"kind\":\"expTime\",...}");
- *   ...
- *   db.PagerAltMap("global.layout", kAltIds);   // optional
- *   db.EndPager();
- *   db.Opaque("motion", locks, "Motion recording");
- *   db.BeginSettings("settings", settings);
- *   db.SettingsField(0, 0, "routing.mode", "Delay Mode", "{\"kind\":\"enum\",...}");
- *   ...
- *   db.EndSettings();
- *   const uint32_t len = db.Finish();           // 0 on any drift/overflow
- */
-
 #pragma once
 
 #include <cstddef>
@@ -49,9 +18,12 @@ class Manual;
 
 namespace hostlink {
 
+constexpr size_t kDefaultDescriptorCapacity = 32u * 1024u;
+
 /** Wire field types (protocol §5). */
 enum class FieldType : uint8_t { F32, Enum };
 
+// Finish returns zero if the declared fields disagree with the serialized layout or exceed the buffer.
 class DescriptorBuilder
 {
   public:
