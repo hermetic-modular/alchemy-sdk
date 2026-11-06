@@ -24,6 +24,7 @@ add_executable(hostlink_tests
     param_lock_tests.cpp
     ram_diskio.cpp
     "${SDK_ROOT}/framework/src/host_link/host_link.cpp"
+    "${SDK_ROOT}/framework/src/host_link/fast_values.cpp"
     "${SDK_ROOT}/framework/src/host_link/descriptor.cpp"
     "${SDK_ROOT}/framework/src/host_link/describe.cpp"
     "${SDK_ROOT}/framework/src/host_link/json_check.cpp"

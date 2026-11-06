@@ -162,6 +162,18 @@ Host& Host::Extend(IHostlinkExtension& ext)
     return *this;
 }
 
+Host& Host::Fast(Serializable& source)
+{
+    if (started_ || !fast_.Add(source)) fast_ok_ = configuration_ok_ = false;
+    return *this;
+}
+
+Host& Host::Fast(Serializable& owner, FastProjection projection)
+{
+    if (started_ || !fast_.Add(owner, projection)) fast_ok_ = configuration_ok_ = false;
+    return *this;
+}
+
 void Host::OnAttach(ControlLoop& loop) { loop_ = &loop; }
 
 void Host::Start()
@@ -217,6 +229,12 @@ void Host::Start()
             *transport_, *presets_, info, staging_, snapshot_, buf_cap_);
     else
         link_ = new (link_storage_) HostLink(*transport_, info);
+
+    if (!fast_.Empty()) {
+        if (fast_ok_ && presets_ && fast_.Prepare(*presets_, loop_ ? loop_->Phys() : nullptr, kNumPots))
+            link_->SetFastValues(fast_);
+        else configuration_ok_ = false;
+    }
 
     if (manual_desc_)
     {

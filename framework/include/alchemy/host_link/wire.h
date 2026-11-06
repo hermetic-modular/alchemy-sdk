@@ -47,6 +47,8 @@ enum class Cmd : uint8_t
     BlobCommit    = 0x14,
     EraseSlot     = 0x15,
     GetLive       = 0x20,
+    GetFast       = 0x21,
+    SetFast       = 0x22,
     SaveToSlot    = 0x30,
     LoadFromSlot  = 0x31,
     Reboot        = 0x40,

@@ -940,3 +940,66 @@ node --test tools/hostlink-cli/diagnostics.test.mjs
 The programmer's `src/lib/settings-link/__tests__` contains a copy checked
 by its production-client tests. Update both when the protocol changes.
 The CLI codec and programmer's `diagnostics.ts` decode the same vectors.
+
+## 10. Fast live values (optional)
+
+A module opts managed components into a faster mirror before the first Host
+poll. For example, `host.Fast(pager, settings, customState)` selects the
+existing serialized representation of each component. Without selections
+the module answers UNSUPPORTED. GET_LIVE remains the complete snapshot.
+Fast selections and layout metadata do not participate in preset schema hashing.
+
+An author can select a byte range inside a larger owner using
+`host.Fast(owner, FastProjection{offset, size, context, capture, edit})`.
+For example, if a recorder stores a normalized mix at byte 4 of its preset:
+
+```cpp
+host.Fast(recorder, hostlink::FastProjection{
+    4, sizeof(float), &recorder,
+    [](void* context, uint8_t* out, uint16_t) {
+        const float mix = static_cast<Recorder*>(context)->Mix();
+        std::memcpy(out, &mix, sizeof mix);
+    },
+    [](void* context, uint16_t offset, const uint8_t* data, uint16_t size) {
+        if (offset || size != sizeof(float)) return false;
+        float mix;
+        std::memcpy(&mix, data, sizeof mix);
+        if (!(mix >= 0.f && mix <= 1.f)) return false;
+        static_cast<Recorder*>(context)->SetMix(mix);
+        return true;
+    }
+});
+```
+
+Capture must fill exactly the declared length with the bytes the owner's full
+serializer would produce. Callbacks run in the control loop. The context and
+owner must outlive Host. Use a null edit callback for read-only projections.
+Whole custom components are read-only through this command. Pager and Settings
+support targeted edits when the Host has the required physical pot positions.
+Up to 16 nonempty disjoint regions must fit one response including all headers.
+Invalid setup fails Host::ConfigurationOk() and disables the fast family.
+
+### 0x21 GET_FAST
+
+Request: empty. Response: `u8 status, u32 schema_hash`, then one or more
+`u16 offset, u16 size, u8 flags, bytes[size]` records to end of frame.
+Offsets are absolute within the full preset, in increasing order. Flag bit 0
+indicates targeted writes are supported; all other bits are zero. Each response
+is freshly captured into its own frame and may be read during a chunked GET_LIVE.
+Discover by probing once per connection; UNSUPPORTED selects slow-only operation.
+Hosts must validate the schema, lengths and regions before applying any bytes.
+
+### 0x22 SET_FAST
+
+Request: `u32 schema_hash, u16 offset, bytes[]` (one complete edit).
+Response: `u8 status`. The complete edit must fit inside one selected writable
+region. Pager accepts a single normalized finite float at its field boundary.
+Settings accepts an exact, valid encoded scalar at its serialized field offset.
+Projection callbacks receive an offset relative to their region. Rejections
+must leave state intact. A staged live BLOB transaction takes precedence (BUSY).
+
+Editors target one GET_FAST per 100 ms while actively mirroring live state.
+Keep edits and reads serialized, coalesce drag values, skip missed ticks, and
+give bulk operations time to finish. This cadence is a browser policy; a module
+only captures fast state in response to a request. Close/reconnect discards
+pending edits and requires a fresh discovery.

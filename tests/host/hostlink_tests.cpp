@@ -26,6 +26,7 @@
 #include "alchemy/host_link/frame.h"
 #include "alchemy/host_link/json_check.h"
 #include "alchemy/host_link/host_link.h"
+#include "alchemy/host_link/fast_values.h"
 #include "alchemy/host_link/diagnostics.h"
 #include "alchemy/host_link/wire.h"
 #include "alchemy/hw/alchemy_lab.h"
@@ -148,6 +149,7 @@ template <uint8_t N>
 struct TestComp : Serializable
 {
     float    vals[N] = {};
+    mutable unsigned captures = 0;
     uint32_t hash;
 
     explicit TestComp(uint32_t h) : hash(h) {}
@@ -155,6 +157,7 @@ struct TestComp : Serializable
     size_t SerializedSize() const override { return N * sizeof(float); }
     void   Serialize(uint8_t* out) const override
     {
+        ++captures;
         std::memcpy(out, vals, sizeof(vals));
     }
     bool Deserialize(const uint8_t* in) override
@@ -503,6 +506,102 @@ static void TestGetLive(Fixture& fx)
 
     const auto live = LiveBytes(fx);
     CHECK(std::memcmp(r.body.data() + 14, live.data(), live.size()) == 0);
+}
+
+static void TestFastMirror()
+{
+    Fixture fx;
+    CHECK(Transact(fx, Cmd::GetFast, {}).body[0] == uint8_t(Status::Unsupported));
+    Pager pager(2, 3);
+    fx.presets.Manage(pager);
+    float physical[3] = {};
+    FastProjection slice{4, 4, &fx.comp_b.vals[1],
+        [](void* ctx, uint8_t* dst, uint16_t size) { std::memcpy(dst, ctx, size); },
+        [](void* ctx, uint16_t off, const uint8_t* src, uint16_t size) {
+            if (off || size != 4) return false;
+            std::memcpy(ctx, src, size);
+            return true;
+        }};
+    FastValues fast;
+    CHECK(fast.Add(pager));
+    CHECK(fast.Add(fx.comp_b, slice));
+    CHECK(fast.Prepare(fx.presets, physical, 3));
+    fx.link.SetFastValues(fast);
+
+    // Begin a slow snapshot, then record new data on the panel.
+    auto initial = LiveBytes(fx);
+    std::vector<uint8_t> slow(6);
+    WrU16(slow.data()+4, 4);
+    CHECK(Transact(fx, Cmd::GetLive, slow).body[0] == 0);
+    fx.comp_a.vals[2] = 0.875f;
+    const auto a = fx.comp_a.captures, b = fx.comp_b.captures;
+    auto fastRead = Transact(fx, Cmd::GetFast, {}).body;
+    CHECK_EQ(fastRead.size(), size_t(5 + 5 + 4 + 5 + 24));
+    CHECK_EQ(RdU32(fastRead.data()+1), fx.presets.LiveSchemaHash());
+    CHECK_EQ(RdU16(fastRead.data()+5), 20u);
+    CHECK_EQ(fastRead[9], 1u);
+    CHECK(std::memcmp(fastRead.data()+10, initial.data()+20, 4) == 0);
+    CHECK_EQ(RdU16(fastRead.data()+14), 32u);
+    CHECK(std::memcmp(fastRead.data()+19, initial.data()+32, 24) == 0);
+
+    std::vector<uint8_t> edit(10);
+    WrU32(edit.data(), fx.presets.LiveSchemaHash());
+    const float mix = 0.73f;
+    std::memcpy(edit.data()+6, &mix, 4);
+    WrU16(edit.data()+4, 48); // pager page 1, pot 1
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == 0);
+    CHECK(pager.Stored(1,1) == mix);
+    WrU16(edit.data()+4, 20);
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == 0);
+    CHECK(fx.comp_b.vals[1] == mix);
+    WrU16(edit.data()+4, 49);
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == uint8_t(Status::BadArgs));
+    WrU16(edit.data()+4, 8);
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == uint8_t(Status::BadArgs));
+    WrU32(edit.data(), 0);
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == uint8_t(Status::SchemaMismatch));
+    std::vector<uint8_t> begin(9);
+    begin[0] = kTargetLive;
+    WrU32(begin.data()+1, fx.presets.LiveSize());
+    WrU32(begin.data()+5, fx.presets.LiveSchemaHash());
+    CHECK(Transact(fx, Cmd::BlobBegin, begin).body[0] == 0);
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == uint8_t(Status::Busy));
+    fx.now_ms += 6000; // expire the transaction before continuing
+    CHECK(fx.comp_a.vals[2] == 0.875f);
+    CHECK_EQ(fx.comp_a.captures, a);
+    CHECK_EQ(fx.comp_b.captures, b); // slice never invokes whole-owner Serialize
+
+    WrU32(slow.data(), 4);
+    WrU16(slow.data()+4, 128);
+    auto tail = Transact(fx, Cmd::GetLive, slow).body;
+    CHECK(std::memcmp(tail.data()+14, initial.data()+4, initial.size()-4) == 0);
+
+    FastValues readOnly;
+    CHECK(readOnly.Add(fx.comp_a));
+    CHECK(readOnly.Prepare(fx.presets, nullptr, 0));
+    fx.link.SetFastValues(readOnly);
+    CHECK(Transact(fx, Cmd::GetFast, {}).body[9] == 0);
+    WrU32(edit.data(), fx.presets.LiveSchemaHash());
+    CHECK(Transact(fx, Cmd::SetFast, edit).body[0] == uint8_t(Status::Unsupported));
+
+    FastValues overlap;
+    CHECK(overlap.Add(fx.comp_b) && overlap.Add(fx.comp_b, slice));
+    CHECK(!overlap.Prepare(fx.presets, physical, 3));
+    slice.offset = 15;
+    FastValues outOfBounds;
+    CHECK(outOfBounds.Add(fx.comp_b, slice));
+    CHECK(!outOfBounds.Prepare(fx.presets, nullptr, 0));
+    TestComp<1> unmanaged(42);
+    FastValues missing;
+    CHECK(missing.Add(unmanaged) && !missing.Prepare(fx.presets, nullptr, 0));
+    struct Big : TestComp<1> {
+        Big() : TestComp<1>(123) {}
+        size_t SerializedSize() const override { return kMaxBody; }
+    } big;
+    fx.presets.Manage(big);
+    FastValues oversized;
+    CHECK(oversized.Add(big) && !oversized.Prepare(fx.presets, nullptr, 0));
+    CHECK(Transact(fx, Cmd::GetFast, {}).body[0] == uint8_t(Status::SchemaMismatch));
 }
 
 /** Full BLOB_BEGIN/DATA/COMMIT to @p target with @p payload. */
@@ -2354,6 +2453,14 @@ static void TestSettingsLoadCanonicalization()
     CHECK_EQ(sf.mode.Value(), uint8_t(3));     /* 4 zones → clamp to 3 */
     CHECK(sf.knob.Value() == 0.0f);
     CHECK(st.StoredNormAt(0, 1) == 0.0f);
+    const uint8_t zone = 1;
+    CHECK(st.SetSerializedField(0, &zone, 1, kPhys));
+    CHECK_EQ(sf.mode.Value(), zone);
+    CHECK(st.SetSerializedField(1, reinterpret_cast<const uint8_t*>(&knob_v), 4, kPhys));
+    CHECK(sf.knob.Value() == knob_v);
+    CHECK(!st.SetSerializedField(2, blob, 4, kPhys));
+    CHECK(!st.SetSerializedField(0, blob, 1, kPhys)); // invalid zone
+
 }
 
 /* Pager::GoToPage — direct page addressing for "home"-style gestures.
@@ -2489,6 +2596,7 @@ int main(int argc, char** argv)
         TestHello(fx);
         TestDescriptorChunks(fx);
         TestGetLive(fx);
+        TestFastMirror();
         TestSetLive(fx);
         TestSlotWriteReadList(fx);
         TestErrorPaths(fx);

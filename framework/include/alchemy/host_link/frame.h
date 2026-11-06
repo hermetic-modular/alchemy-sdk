@@ -55,6 +55,15 @@ class FrameWriter
         len_ += static_cast<uint16_t>(n);
     }
 
+    /** Reserve checked output space for a serializer that writes directly into the response. */
+    uint8_t* ReserveBytes(uint16_t n)
+    {
+        if (!Fits(n)) return nullptr;
+        auto* p = buf_ + kHeaderSize + len_;
+        len_ += n;
+        return p;
+    }
+
     /** Length-prefixed ASCII string (u8 len + bytes, truncated at 255). */
     void Str(const char* s)
     {
