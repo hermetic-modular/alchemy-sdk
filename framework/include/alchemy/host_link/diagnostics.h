@@ -97,7 +97,9 @@ class Diagnostics : public IHostlinkExtension
   public:
     static constexpr uint16_t kCapacity = ALCHEMY_DIAGNOSTIC_RECORDS;
     static constexpr uint16_t kMaxText = ALCHEMY_DIAGNOSTIC_TEXT;
-    static constexpr uint8_t kMaxGauges = 16u;
+    static constexpr uint8_t kMaxGauges = 64u;
+    static_assert(10u + 7u * kMaxGauges <= kMaxBody,
+                  "diagnostic values exceed HostLink frame capacity");
     static_assert(ALCHEMY_DIAGNOSTIC_RECORDS > 0
                   && ALCHEMY_DIAGNOSTIC_RECORDS <= 1024, "invalid log capacity");
     static_assert(ALCHEMY_DIAGNOSTIC_TEXT >= 16
