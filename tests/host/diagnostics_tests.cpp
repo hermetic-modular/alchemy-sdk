@@ -158,9 +158,10 @@ static void TestGauges()
     {
         ids.push_back(std::string(46, 'x') + std::to_string(i));
         gauges.push_back(new Gauge<uint32_t>(ids.back().c_str(), "A long enough label to force descriptor pagination at 512 bytes"));
+        gauges.back()->Set(i);
         CHECK(many.Watch(*gauges.back()) == (i < Diagnostics::kMaxGauges));
     }
-    Info(many);
+    CHECK(Info(many).back() == Diagnostics::kMaxGauges);
     req.resize(5); req[4] = 0;
     unsigned seen = 0;
     while (req[4] < Diagnostics::kMaxGauges)
@@ -174,6 +175,20 @@ static void TestGauges()
     CHECK(seen == Diagnostics::kMaxGauges);
     req[4] = Diagnostics::kMaxGauges + 1u;
     CHECK(Call(many, Cmd::DiagDescribe, req)[0] == uint8_t(Status::BadArgs));
+    req.resize(4);
+    values = Call(many, Cmd::DiagValues, req);
+    const size_t expected_size = 10u + 7u * Diagnostics::kMaxGauges;
+    CHECK(values.size() == expected_size);
+    if (values.size() == expected_size)
+    {
+        CHECK(values[9] == Diagnostics::kMaxGauges);
+        for (unsigned i = 0; i < Diagnostics::kMaxGauges; ++i)
+        {
+            const uint8_t* value = values.data() + 10u + 7u * i;
+            CHECK(value[0] == i && value[1] == uint8_t(GaugeType::UInt));
+            CHECK(value[2] == 1u && RdU32(value + 3) == i);
+        }
+    }
     for (auto* g : gauges) delete g;
 }
 
