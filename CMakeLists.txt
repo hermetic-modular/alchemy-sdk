@@ -69,6 +69,10 @@ add_subdirectory(framework)
 if(NOT CMAKE_CROSSCOMPILING)
     enable_testing()
     add_subdirectory(tests)
+else()
+    add_library(midi_arm_compile OBJECT EXCLUDE_FROM_ALL tests/midi/arm_compile.cpp)
+    target_link_libraries(midi_arm_compile PRIVATE alchemy::midi_daisy alchemy::midi_clock alchemy::surface)
+    target_compile_options(midi_arm_compile PRIVATE -Werror -fno-exceptions -fno-rtti)
 endif()
 
 # ── Examples (firmware — cross-compile only) ──────────────────────────────

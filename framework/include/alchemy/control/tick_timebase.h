@@ -19,6 +19,30 @@ namespace alchemy {
 class TickTimebase
 {
   public:
+    struct Sample {
+        uint32_t raw_tick = 0u;
+        uint32_t time_us = 0u;
+        uint32_t frequency_hz = 0u;
+        uint32_t remainder = 0u;
+
+        bool Valid() const { return frequency_hz && remainder < frequency_hz; }
+
+        /** Convert a recent past observation in this epoch, including fractional phase. */
+        bool TimeOf(uint32_t observed_tick, uint32_t& result,
+                    uint32_t max_age_us = 2000000u) const
+        {
+            if (!Valid()) return false;
+            const uint32_t age_ticks = raw_tick - observed_tick;
+            if (age_ticks > 0x7fffffffu) return false;
+            const uint64_t scaled = uint64_t(age_ticks) * 1000000u;
+            const uint64_t age_us = scaled <= remainder ? 0u
+                : (scaled - remainder + frequency_hz - 1u) / frequency_hz;
+            if (age_us > max_age_us) return false;
+            result = time_us - static_cast<uint32_t>(age_us);
+            return true;
+        }
+    };
+
     /** Establish an epoch; initial_us is normally zero. frequency_hz > 0. */
     void Init(uint32_t frequency_hz, uint32_t raw_tick,
               uint32_t initial_us = 0u)
@@ -48,6 +72,8 @@ class TickTimebase
     }
 
     uint32_t NowUs() const { return now_us_; }
+    uint32_t RawTick() const { return last_tick_; }
+    Sample GetSample() const { return {last_tick_, now_us_, frequency_hz_, remainder_}; }
 
   private:
     uint32_t frequency_hz_ = 0u;

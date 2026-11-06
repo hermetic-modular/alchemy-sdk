@@ -1,29 +1,3 @@
-/**
- * @file musical_clock.h
- * @brief Free-running, monotonic musical timeline (NCO).
- *
- * `MusicalClock` is a numerically-controlled oscillator that integrates a
- * **rate** every control tick and emits musical position (bar / beat /
- * tick-in-beat / continuous phase) plus a per-tick subdivision event
- * bitmask (`CLK_EV_*`).  It is the sole source of truth that modules read.
- *
- * It does not know or care whether its rate comes from an internal BPM
- * setting (`SetBpm`) or an external follower (`alchemy::ClockFollower`).
- *
- * Phase advances continuously between control polls (time-based
- * integration; no fixed-rate assumption) and is **monotonic** — it never
- * moves backward.  Audio modules can therefore derive sample-accurate
- * gates and playheads from `BeatPhase()` / `BarPhase()` without clicks.
- *
- * Typical wiring inside ControlLoop::OnPoll, once per ~1 ms tick:
- *
- *     follower_.Update(now_us);   // PI loop, loss detection
- *     clock_.Tick(now_us);        // integrate rate → events + position
- *
- * Heap-free, ISR-safe to write `SetTicksPerUs` /  `OrPendingEvent` from
- * the poll context (single-word stores on Cortex-M7).
- */
-
 #pragma once
 
 #include <cstdint>
@@ -43,14 +17,11 @@ constexpr uint32_t kClockExtPpqnDefault = 24u;
 /** Default beats per bar (4/4). */
 constexpr uint8_t kClockBeatsPerBarDefault = 4u;
 
-/** Tempo bounds shared by the NCO rate clamp and the follower validity
- *  window.  Single source of truth — do not duplicate. */
+/** Tempo bounds used by internal tempo and follower validity limits. */
 constexpr float kClockBpmMin = 20.0f;
 constexpr float kClockBpmMax = 300.0f;
 
-/** Catch-up clamp on the per-tick dt.  Limits how many sub-ticks a long
- *  poll stall can produce in a single `Tick`.  50 ms covers any plausible
- *  scheduler hiccup; longer stalls would dump a burst of catch-up ticks. */
+/** Limit one Tick to 50 ms of catch-up after a polling gap. */
 constexpr uint32_t kClockMaxTickDtUs = 50000u;
 
 /* ── Subdivision event bitmask (`CLK_EV_*`) ─────────────────────────────── */
@@ -92,9 +63,7 @@ constexpr uint32_t TWO_BAR         = 1u << 22;
 constexpr uint32_t FOUR_BAR        = 1u << 23;
 constexpr uint32_t EIGHT_BAR       = 1u << 24;
 
-/* Clock-grid (24 PPQN) — kept distinct from THIRTYSECOND_T (same period at
- * 96 PPQN) so a future internal-PPQN change cannot silently break MIDI
- * clock emission. */
+/* MIDI clock has its own event bit even when its period matches a triplet. */
 constexpr uint32_t MIDI_CLOCK      = 1u << 25;
 
 /* External-clock state (set by `ClockFollower` via `OrPendingEvent`). */
@@ -103,16 +72,13 @@ constexpr uint32_t EXT_LOST        = 1u << 27;
 
 } // namespace CLK_EV
 
-/* ── MusicalClock ──────────────────────────────────────────────────────── */
-
+// One audio or foreground owner. Transport commands take effect on the next Tick.
 class MusicalClock
 {
   public:
     /**
-     * @param ppqn          Internal timeline resolution.  Must be a multiple
-     *                      of 24 (so every straight, triplet, dotted, and
-     *                      24-PPQN MIDI-clock subdivision lands on exact
-     *                      integer ticks).  Default 96 is recommended.
+     * @param ppqn          Positive multiple of 24. Default 96 represents all
+     *                      subdivisions; unrepresentable flags are omitted.
      * @param beats_per_bar Time-signature numerator.  Only the bar /
      *                      multi-bar event math depends on it.
      */
@@ -121,13 +87,15 @@ class MusicalClock
 
     /* ── Per-poll integration ────────────────────────────────────────── */
 
-    /** Apply any deferred transport, integrate `ticks_per_us * dt`, and
-     *  fire subdivision events for every integer tick that crossed.
-     *  Call once per control poll (≈ 1 ms).  `now_us` is a microsecond
-     *  timestamp wrapping modulo 2^32 MICROSECONDS, in the same epoch as
-     *  the follower's pulse timestamps. Use ControlLoop::PollTimeUs() or
-     *  TickTimebase; Daisy's System::GetUs() wraps early and is unsuitable. */
+    /** Apply transport, integrate elapsed time, and coalesce crossed subdivisions.
+     *  Poll around 1 ms with uint32 microseconds in the follower's epoch. Use
+     *  TickTimebase or ControlLoop::PollTimeUs(); System::GetUs() wraps early. */
     void Tick(uint32_t now_us);
+
+    /** Forward phase correction after Tick has applied deferred transport.
+     *  Crossed flags join Events() in bounded time. Rejects backward positions
+     *  (apart from rounding tolerance) and fractions outside [0, 1). */
+    bool Synchronize(uint64_t master_tick, uint32_t now_us, double frac_tick = 0.0);
 
     /* ── Transport (deferred; applied at the top of the next Tick) ───── */
 
@@ -141,10 +109,12 @@ class MusicalClock
      *  `CLK_EV::RESET` and all downbeat subdivision flags. */
     void Reset();
 
+    /** Deferred position change; preserves transport and emits no subdivision. */
+    void Seek(uint64_t master_tick);
+
     /* ── Configuration ───────────────────────────────────────────────── */
 
-    /** Set internal tempo.  Ignored while a follower is steering (see
-     *  `IsSteered`); user-side gating is unnecessary — the no-op is safe. */
+    /** Set internal tempo; ignore nonfinite values or changes while steered. */
     void SetBpm(float bpm);
 
     /** Change the bar length (time-signature numerator). */
@@ -152,9 +122,7 @@ class MusicalClock
 
     /* ── Rate-control surface used by ClockFollower ──────────────────── */
 
-    /** Write the steered rate in internal ticks per microsecond.  Cheap;
-     *  safe to call from the poll path.  A follower should always call
-     *  `SetSteered(true)` first so user `SetBpm` calls become no-ops. */
+    /** Nonfinite rates are ignored. Negative rates hold the current position. */
     void SetTicksPerUs(double tpu);
 
     /** Current rate (internal ticks / µs). */
@@ -167,9 +135,7 @@ class MusicalClock
     /** True iff an external source is currently steering the rate. */
     bool IsSteered() const { return steered_; }
 
-    /** OR additional flags into the next `Tick`'s event bitmask.  Intended
-     *  for the follower to inject `EXT_LOCK` / `EXT_LOST` so they coalesce
-     *  with the same Tick's subdivision flags.  Cheap, ISR-safe. */
+    /** Add flags to the next Tick, including follower EXT_LOCK / EXT_LOST. */
     void OrPendingEvent(uint32_t flags) { pending_ext_events_ |= flags; }
 
     /* ── Queries ─────────────────────────────────────────────────────── */
@@ -204,9 +170,9 @@ class MusicalClock
 
   private:
     void ApplyDeferredTransport();
-    void AdvanceOnePpqnTick();
+    void SetPosition(uint64_t tick);
+    uint32_t SubdivisionEventsBetween(uint64_t first_tick, uint64_t last_tick) const;
     void RecomputePeriods();
-    void FireDownbeatEvents();
 
     /* ── Position / rate ─────────────────────────────────────────────── */
     uint64_t master_tick_   = 0u;
@@ -231,6 +197,8 @@ class MusicalClock
     bool     pending_start_     = false;
     bool     pending_stop_      = false;
     bool     pending_reset_     = false;
+    bool     pending_seek_      = false;
+    uint64_t pending_seek_tick_ = 0u;
     uint32_t pending_ext_events_ = 0u;
 
     /* ── Pre-computed event periods (0 = "not representable at this PPQN") */

@@ -105,6 +105,14 @@ void HostLink::Poll(uint32_t now_ms)
     {
         const size_t n = transport_.Read(rx_buf_, sizeof(rx_buf_));
         if (n == 0u) break;
+        const uint32_t generation = transport_.ReadGeneration();
+        if (generation != read_generation_)
+        {
+            read_generation_ = generation;
+            parser_.Reset();
+            AbortStage();
+            snap_valid_ = false;
+        }
 
         for (size_t i = 0u; i < n; i++)
         {

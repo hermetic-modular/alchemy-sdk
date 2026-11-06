@@ -1,31 +1,24 @@
-/**
- * @file musical_clock.cpp
- * @brief Free-running musical NCO timeline.  See musical_clock.h.
- */
-
 #include "alchemy/control/musical_clock.h"
 
 #include <cassert>
+#include <cmath>
 
 namespace alchemy {
 
 namespace {
 
-/* `master_tick_ % period == 0` with a zero-period sentinel meaning
- * "not representable at this PPQN — never fires". */
-inline uint32_t Fire(uint64_t master_tick, uint32_t period, uint32_t flag)
+// A zero period marks a subdivision this PPQN cannot represent.
+inline uint32_t Fire(uint64_t first_tick, uint64_t last_tick, uint32_t period, uint32_t flag)
 {
     if (period == 0u) return 0u;
-    return (master_tick % period == 0u) ? flag : 0u;
+    const auto phase = first_tick % period;
+    return (phase == 0u || last_tick - first_tick >= period - phase) ? flag : 0u;
 }
 
 } // namespace
 
 MusicalClock::MusicalClock(uint32_t ppqn, uint8_t beats_per_bar)
 {
-    /* PPQN must be a positive multiple of 24 so every straight, triplet,
-     * dotted, and 24-PPQN MIDI-clock subdivision lands on exact integer
-     * ticks. */
     assert(ppqn > 0u && (ppqn % 24u) == 0u);
     assert(beats_per_bar > 0u);
 
@@ -71,15 +64,20 @@ void MusicalClock::RecomputePeriods()
     p_midi_clock_ = ppqn_ / kClockExtPpqnDefault;
 }
 
-void MusicalClock::Start() { pending_start_ = true; }
-void MusicalClock::Stop()  { pending_stop_  = true; }
-void MusicalClock::Reset() { pending_reset_ = true; }
+void MusicalClock::Start() { pending_start_ = true; pending_stop_ = false; }
+void MusicalClock::Stop()  { pending_stop_ = true; pending_start_ = false; }
+void MusicalClock::Reset() { pending_reset_ = true; pending_seek_ = false; }
+
+void MusicalClock::Seek(uint64_t master_tick)
+{
+    pending_seek_tick_ = master_tick;
+    pending_seek_ = true;
+    pending_reset_ = false;
+}
 
 void MusicalClock::SetBpm(float bpm)
 {
-    /* Silently no-op while an external follower is steering — the user's
-     * `SetBpm` call would otherwise fight the PI loop.  See spec §5. */
-    if (steered_) return;
+    if (steered_ || !std::isfinite(bpm)) return;
     if (bpm < kClockBpmMin) bpm = kClockBpmMin;
     if (bpm > kClockBpmMax) bpm = kClockBpmMax;
     ticks_per_us_ = (static_cast<double>(bpm) * static_cast<double>(ppqn_))
@@ -91,10 +89,12 @@ void MusicalClock::SetTimeSignature(uint8_t beats_per_bar)
     assert(beats_per_bar > 0u);
     beats_per_bar_ = beats_per_bar;
     RecomputePeriods();
+    SetPosition(master_tick_);
 }
 
 void MusicalClock::SetTicksPerUs(double tpu)
 {
+    if (!std::isfinite(tpu)) return;
     if (tpu < 0.0) tpu = 0.0;
     ticks_per_us_ = tpu;
 }
@@ -130,9 +130,15 @@ void MusicalClock::ApplyDeferredTransport()
         bar_          = 0u;
         beat_in_bar_  = 0u;
         tick_in_beat_ = 0u;
-        events_      |= CLK_EV::RESET;
-        FireDownbeatEvents();
+        events_ |= CLK_EV::RESET | SubdivisionEventsBetween(0, 0);
         pending_reset_ = false;
+    }
+    if (pending_seek_)
+    {
+        SetPosition(pending_seek_tick_);
+        frac_tick_ = 0.0;
+        have_last_us_ = false;
+        pending_seek_ = false;
     }
     if (pending_stop_)
     {
@@ -144,106 +150,93 @@ void MusicalClock::ApplyDeferredTransport()
     {
         running_       = true;
         events_       |= CLK_EV::START;
-        /* Force the next dt to start from now, not from a stale stamp
-         * captured before the user pressed Start. */
         have_last_us_  = false;
         pending_start_ = false;
     }
 }
 
-void MusicalClock::FireDownbeatEvents()
-{
-    /* All periodic flags whose period divides 0 fire at master_tick=0.
-     * Reusing AdvanceOnePpqnTick keeps the logic in one place. */
-    AdvanceOnePpqnTick();
-}
-
 void MusicalClock::Tick(uint32_t now_us)
 {
-    /* Each Tick is one event-batch.  External flags injected by the
-     * follower since the previous Tick coalesce with this batch's
-     * subdivision flags. */
     events_ = pending_ext_events_;
     pending_ext_events_ = 0u;
 
     ApplyDeferredTransport();
 
-    if (!running_)
+    if (!running_ || !have_last_us_)
     {
         last_us_      = now_us;
         have_last_us_ = true;
         return;
     }
 
-    if (!have_last_us_)
-    {
-        last_us_      = now_us;
-        have_last_us_ = true;
-        return;
-    }
-
-    /* Wrap-safe unsigned subtraction.  Caller's `now_us` is from the
-     * platform monotonic counter; the implicit modulo-2^32 difference
-     * recovers the true dt for any gap < ~71 minutes. */
     uint32_t dt = now_us - last_us_;
     last_us_    = now_us;
-
-    /* A long stall (scheduler hiccup, settings menu) would otherwise
-     * dump a flood of catch-up ticks the moment we resume.  Clamp. */
     if (dt > kClockMaxTickDtUs) dt = kClockMaxTickDtUs;
 
-    frac_tick_ += ticks_per_us_ * static_cast<double>(dt);
-
-    while (frac_tick_ >= 1.0)
-    {
-        frac_tick_ -= 1.0;
-        ++master_tick_;
-        AdvanceOnePpqnTick();
-    }
+    const double elapsed = frac_tick_ + ticks_per_us_ * static_cast<double>(dt);
+    if (elapsed < 1.0) { frac_tick_ = elapsed; return; }
+    if (!(elapsed < 0x1p64)) return;
+    const auto ticks = static_cast<uint64_t>(elapsed);
+    frac_tick_ = elapsed - static_cast<double>(ticks);
+    const uint64_t next = master_tick_ + ticks;
+    // A counter wrap crosses the downbeat, which fires every representable subdivision.
+    events_ |= SubdivisionEventsBetween(next < master_tick_ ? 0 : master_tick_ + 1u, next);
+    SetPosition(next);
 }
 
-void MusicalClock::AdvanceOnePpqnTick()
+bool MusicalClock::Synchronize(uint64_t master_tick, uint32_t now_us, double frac_tick)
 {
-    /* Position: derived from master_tick_ each call so any path that
-     * mutates master_tick_ (Reset, sub-tick loop) stays consistent. */
-    if (p_quarter_ > 0u)
-    {
-        tick_in_beat_ = static_cast<uint32_t>(master_tick_ % p_quarter_);
-    }
-    if (p_bar_ > 0u)
-    {
-        beat_in_bar_ = static_cast<uint32_t>(
-            (master_tick_ / p_quarter_) % static_cast<uint64_t>(beats_per_bar_));
-        bar_ = static_cast<uint32_t>(master_tick_ / p_bar_);
-    }
+    if (!std::isfinite(frac_tick) || frac_tick < 0.0 || frac_tick >= 1.0
+        || master_tick < master_tick_
+        || (master_tick == master_tick_ && frac_tick + 1e-9 < frac_tick_)) return false;
+    if (master_tick > master_tick_)
+        events_ |= SubdivisionEventsBetween(master_tick_ + 1u, master_tick);
+    SetPosition(master_tick);
+    frac_tick_ = frac_tick;
+    last_us_ = now_us;
+    have_last_us_ = true;
+    return true;
+}
 
-    /* OR in every subdivision whose period divides the current tick. */
-    events_ |= Fire(master_tick_, p_64th_,         CLK_EV::SIXTYFOURTH);
-    events_ |= Fire(master_tick_, p_32nd_,         CLK_EV::THIRTYSECOND);
-    events_ |= Fire(master_tick_, p_16th_,         CLK_EV::SIXTEENTH);
-    events_ |= Fire(master_tick_, p_8th_,          CLK_EV::EIGHTH);
-    events_ |= Fire(master_tick_, p_quarter_,      CLK_EV::QUARTER);
-    events_ |= Fire(master_tick_, p_half_,         CLK_EV::HALF);
-    events_ |= Fire(master_tick_, p_whole_,        CLK_EV::WHOLE);
-    events_ |= Fire(master_tick_, p_bar_,          CLK_EV::BAR);
-    events_ |= Fire(master_tick_, p_2bar_,         CLK_EV::TWO_BAR);
-    events_ |= Fire(master_tick_, p_4bar_,         CLK_EV::FOUR_BAR);
-    events_ |= Fire(master_tick_, p_8bar_,         CLK_EV::EIGHT_BAR);
+void MusicalClock::SetPosition(uint64_t tick)
+{
+    master_tick_ = tick;
+    const uint64_t beat = tick / ppqn_;
+    tick_in_beat_ = static_cast<uint32_t>(tick % ppqn_);
+    beat_in_bar_ = static_cast<uint32_t>(beat % beats_per_bar_);
+    bar_ = static_cast<uint32_t>(beat / beats_per_bar_);
+}
 
-    events_ |= Fire(master_tick_, p_32nd_t_,       CLK_EV::THIRTYSECOND_T);
-    events_ |= Fire(master_tick_, p_16th_t_,       CLK_EV::SIXTEENTH_T);
-    events_ |= Fire(master_tick_, p_8th_t_,        CLK_EV::EIGHTH_T);
-    events_ |= Fire(master_tick_, p_quarter_t_,    CLK_EV::QUARTER_T);
-    events_ |= Fire(master_tick_, p_half_t_,       CLK_EV::HALF_T);
-    events_ |= Fire(master_tick_, p_whole_t_,      CLK_EV::WHOLE_T);
+uint32_t MusicalClock::SubdivisionEventsBetween(uint64_t first_tick, uint64_t last_tick) const
+{
+    uint32_t flags = 0u;
+    flags |= Fire(first_tick, last_tick, p_64th_,         CLK_EV::SIXTYFOURTH);
+    flags |= Fire(first_tick, last_tick, p_32nd_,         CLK_EV::THIRTYSECOND);
+    flags |= Fire(first_tick, last_tick, p_16th_,         CLK_EV::SIXTEENTH);
+    flags |= Fire(first_tick, last_tick, p_8th_,          CLK_EV::EIGHTH);
+    flags |= Fire(first_tick, last_tick, p_quarter_,      CLK_EV::QUARTER);
+    flags |= Fire(first_tick, last_tick, p_half_,         CLK_EV::HALF);
+    flags |= Fire(first_tick, last_tick, p_whole_,        CLK_EV::WHOLE);
+    flags |= Fire(first_tick, last_tick, p_bar_,          CLK_EV::BAR);
+    flags |= Fire(first_tick, last_tick, p_2bar_,         CLK_EV::TWO_BAR);
+    flags |= Fire(first_tick, last_tick, p_4bar_,         CLK_EV::FOUR_BAR);
+    flags |= Fire(first_tick, last_tick, p_8bar_,         CLK_EV::EIGHT_BAR);
 
-    events_ |= Fire(master_tick_, p_dotted_16th_,  CLK_EV::DOTTED_16TH);
-    events_ |= Fire(master_tick_, p_dotted_8th_,   CLK_EV::DOTTED_8TH);
-    events_ |= Fire(master_tick_, p_dotted_qtr_,   CLK_EV::DOTTED_QUARTER);
-    events_ |= Fire(master_tick_, p_dotted_half_,  CLK_EV::DOTTED_HALF);
-    events_ |= Fire(master_tick_, p_dotted_whole_, CLK_EV::DOTTED_WHOLE);
+    flags |= Fire(first_tick, last_tick, p_32nd_t_,       CLK_EV::THIRTYSECOND_T);
+    flags |= Fire(first_tick, last_tick, p_16th_t_,       CLK_EV::SIXTEENTH_T);
+    flags |= Fire(first_tick, last_tick, p_8th_t_,        CLK_EV::EIGHTH_T);
+    flags |= Fire(first_tick, last_tick, p_quarter_t_,    CLK_EV::QUARTER_T);
+    flags |= Fire(first_tick, last_tick, p_half_t_,       CLK_EV::HALF_T);
+    flags |= Fire(first_tick, last_tick, p_whole_t_,      CLK_EV::WHOLE_T);
 
-    events_ |= Fire(master_tick_, p_midi_clock_,   CLK_EV::MIDI_CLOCK);
+    flags |= Fire(first_tick, last_tick, p_dotted_16th_,  CLK_EV::DOTTED_16TH);
+    flags |= Fire(first_tick, last_tick, p_dotted_8th_,   CLK_EV::DOTTED_8TH);
+    flags |= Fire(first_tick, last_tick, p_dotted_qtr_,   CLK_EV::DOTTED_QUARTER);
+    flags |= Fire(first_tick, last_tick, p_dotted_half_,  CLK_EV::DOTTED_HALF);
+    flags |= Fire(first_tick, last_tick, p_dotted_whole_, CLK_EV::DOTTED_WHOLE);
+
+    flags |= Fire(first_tick, last_tick, p_midi_clock_,   CLK_EV::MIDI_CLOCK);
+    return flags;
 }
 
 } // namespace alchemy
