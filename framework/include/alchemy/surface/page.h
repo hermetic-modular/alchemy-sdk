@@ -113,7 +113,26 @@ class Page
      *    web editor's page tabs from these — pass string literals) ────── */
 
     Page& Name (const char* name)    { name_  = name;  return *this; }
-    Page& Color(const char* css_hex) { color_ = css_hex; return *this; }
+    Page& Color(const char* css_hex)
+    {
+        color_ = css_hex;
+        rgb_color_[0] = '\0';
+        return *this;
+    }
+    Page& Color(LedPanel::Rgb color)
+    {
+        constexpr char hex[] = "0123456789abcdef";
+        const uint8_t channels[] = {color.r, color.g, color.b};
+        rgb_color_[0] = '#';
+        for (uint8_t i = 0; i < 3u; ++i)
+        {
+            rgb_color_[1u + 2u * i] = hex[channels[i] >> 4u];
+            rgb_color_[2u + 2u * i] = hex[channels[i] & 0x0fu];
+        }
+        rgb_color_[7] = '\0';
+        color_ = nullptr;
+        return *this;
+    }
 
     /** Manual prose for this page (markdown; descriptor-only). */
     Page& Help(const char* md) { help_ = md; return *this; }
@@ -143,7 +162,7 @@ class Page
         return (i < num_buttons_) ? buttons_[i] : nullptr;
     }
     const char*  TabName () const { return name_; }
-    const char*  TabColor() const { return color_; }
+    const char*  TabColor() const { return rgb_color_[0] ? rgb_color_ : color_; }
     const char*  HelpText() const { return help_; }
     bool PotHidden(uint8_t pot) const
     {
@@ -155,6 +174,7 @@ class Page
     uint8_t      count_         = 0;
     const char*  name_          = nullptr;
     const char*  color_         = nullptr;
+    char         rgb_color_[8]  = {};
     const char*  help_          = nullptr;
     VirtualKnob* knobs_[kMaxKnobs] = {};
 
