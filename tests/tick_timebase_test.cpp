@@ -22,6 +22,7 @@ void TestConversion(uint32_t frequency)
     const uint32_t origin = kMax - 17u;
     time.Init(frequency, origin, kMax - 100u);
     CHECK(time.Initialized());
+    CHECK(time.RawTick() == origin);
     CHECK(time.Update(origin) == kMax - 100u);
     uint64_t total_ticks = 0u;
     uint32_t random = 123u;
@@ -35,6 +36,7 @@ void TestConversion(uint32_t frequency)
             (total_ticks / frequency) * 1000000u
             + (total_ticks % frequency) * 1000000u / frequency);
         CHECK(time.Update(origin + static_cast<uint32_t>(total_ticks)) == expected);
+        CHECK(time.RawTick() == origin + static_cast<uint32_t>(total_ticks));
     }
     // Reset elapsed time and fractional remainder.
     time.Init(frequency, 123u);
@@ -53,6 +55,29 @@ void TestFractionalSamples()
     for (uint32_t tick = 1u; tick <= 240000u; ++tick)
         CHECK(time.Update(tick) == tick / 240u);
     CHECK(time.NowUs() == 1000u);
+}
+
+void TestObservedTimestamps(uint32_t frequency)
+{
+    alchemy::TickTimebase time;
+    const uint32_t origin = kMax - 100u;
+    const uint32_t initial_us = kMax - 10u;
+    time.Init(frequency, origin, initial_us);
+    uint32_t stamp = 0u;
+    CHECK(!alchemy::TickTimebase::Sample{}.TimeOf(origin, stamp));
+    for (uint32_t tick = 1u; tick < 1200u; ++tick) {
+        time.Update(origin + tick);
+        const auto sample = time.GetSample();
+        CHECK(sample.Valid() && sample.raw_tick == time.RawTick() && sample.time_us == time.NowUs());
+        for (uint32_t observed = 0u; observed <= tick; observed += 11u) {
+            CHECK(sample.TimeOf(origin + observed, stamp));
+            CHECK(stamp == initial_us + static_cast<uint32_t>(uint64_t(observed) * 1000000u / frequency));
+        }
+        CHECK(!sample.TimeOf(origin + tick + 1u, stamp));
+    }
+    time.Update(origin + frequency * 3u);
+    CHECK(!time.GetSample().TimeOf(origin, stamp));
+    CHECK(time.GetSample().TimeOf(origin, stamp, 3000000u) && stamp == initial_us);
 }
 
 void TestMusicalRollover(uint32_t frequency)
@@ -147,12 +172,14 @@ int main()
     for (const uint32_t frequency : frequencies)
     {
         TestConversion(frequency);
+        TestObservedTimestamps(frequency);
         TestMusicalRollover(frequency);
         TestFollowerAndEdges(frequency, 0u);
         TestFollowerAndEdges(frequency, kMax - 100000u);
         TestDebounce(frequency);
     }
     TestConversion(123456789u); // conversion does not assume integer MHz
+    TestObservedTimestamps(123456789u);
     TestFractionalSamples();
     if (failures) return 1;
     std::puts("all tick timebase tests passed");

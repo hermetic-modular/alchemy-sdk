@@ -189,6 +189,8 @@ class ControlLoop
     ControlLoop& OnPoll       (PollFn   fn) { on_poll_        = fn; return *this; }
 
     uint32_t PollTimeUs() const { return poll_timebase_.NowUs(); }
+    uint32_t PollRawTick() const { return poll_timebase_.RawTick(); }
+    TickTimebase::Sample PollTimestamp() const { return poll_timebase_.GetSample(); }
 
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 

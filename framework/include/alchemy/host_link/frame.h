@@ -1,11 +1,3 @@
-/**
- * @file alchemy/host_link/frame.h
- * @brief HostLink frame assembly (writer) and byte-stream parsing (parser).
- *
- * Both sides are allocation-free and bounded: the parser accumulates at
- * most one wire frame and drops oversize garbage until the next delimiter.
- */
-
 #pragma once
 
 #include <cstddef>
@@ -19,16 +11,7 @@ namespace hostlink {
 
 /* ── FrameWriter ────────────────────────────────────────────────────── */
 
-/**
- * Builds one decoded frame (header + body + CRC) in a caller buffer,
- * then COBS-encodes it (plus delimiter) into a wire buffer.
- *
- *   uint8_t dec[kMaxDecoded], wire[kMaxWire];
- *   FrameWriter w(dec);
- *   w.Begin(type, seq);
- *   w.U8(status); w.U32(x); w.Bytes(p, n);
- *   size_t wire_len = w.Encode(wire);
- */
+// The caller supplies a kMaxDecoded scratch buffer and a separate wire buffer for Encode.
 class FrameWriter
 {
   public:
@@ -114,6 +97,8 @@ struct ParsedFrame
 class FrameParser
 {
   public:
+    void Reset() { acc_len_ = 0u; overflow_ = false; }
+
     /**
      * Feed one received byte.  Returns true when a delimiter completed a
      * frame; @p out is then populated.  Undecodable or runt chunks are
@@ -132,8 +117,7 @@ class FrameParser
         /* Delimiter: decode what we accumulated. */
         const size_t n        = acc_len_;
         const bool   overflow = overflow_;
-        acc_len_  = 0u;
-        overflow_ = false;
+        Reset();
 
         if (n == 0u || overflow) return false;      /* idle delim / garbage */
 

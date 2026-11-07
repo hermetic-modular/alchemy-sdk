@@ -23,6 +23,9 @@ class IHostTransport
     /** Drain up to @p max received bytes into @p dst; returns count. */
     virtual size_t Read(uint8_t* dst, size_t max) = 0;
 
+    /** Each nonempty Read belongs to one stream generation. Return that generation here. */
+    virtual uint32_t ReadGeneration() const { return 0; }
+
     /** Enqueue @p n bytes for transmission; returns bytes accepted. */
     virtual size_t Write(const uint8_t* src, size_t n) = 0;
 

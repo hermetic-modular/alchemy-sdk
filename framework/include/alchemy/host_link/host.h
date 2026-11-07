@@ -1,49 +1,3 @@
-/**
- * @file alchemy/host_link/host.h
- * @brief hostlink::Host — batteries-included HostLink integration.
- *
- * One declaration and one Use() make a module manageable from the web
- * editor:
- *
- *   static Presets        presets(hw.seed.qspi);
- *   static hostlink::Host host(presets, "wavefolder", "Wavefolder",
- *                              "1.2.0", GIT_HASH);
- *
- *   int main()
- *   {
- *       ...
- *       presets.Manage(pager);
- *       presets.Manage(settings);
- *       presets.UseNames();
- *
- *       loop.Use(pager).Use(settings).Use(page_a).Use(page_b).Use(host);
- *
- *       presets.Init();
- *       presets.BootLoad();      // factory defaults snapshot here
- *       ...
- *   }
- *
- * Everything is defaulted and overridable:
- *   - transport: USB CDC on the panel USB-C; product string = module
- *     display name (.Product() / .Transport() to override)
- *   - buffers: SDK-owned, in SDRAM (.Buffers()/.DescriptorBuffer())
- *   - descriptor: derived from the managed components + declared pages
- *     (see describe.h); override per component with OnDescribe(), or
- *     entirely with Descriptor()
- *   - uid / reboot: MCU unique id, bootloader/System reset (.Uid(),
- *     .OnReboot())
- *
- * Start timing: nothing to sequence.  The pre-BootLoad hook only
- * snapshots factory state; the descriptor renders and the link comes up
- * at the first Poll(), after main() has attached pages, jacks, buttons,
- * and manual content — in any order.  Without a ControlLoop, call
- * Poll(t_ms) from your own loop (same thread as preset mutations).
- *
- * One Host per system (the CDC receive callback is a hardware
- * singleton).  Target-only; host builds exercise the descriptor layer
- * via describe.h directly.
- */
-
 #pragma once
 
 #include <cstddef>
@@ -65,12 +19,13 @@ class VirtualButton;
 
 namespace hostlink {
 
+// One Host owns the CDC receiver. Poll on the same thread that mutates presets.
 class Host : public HostService
 {
   public:
     /**
      * @param id    Stable machine id (never rename; hosts key on it).
-     * @param name  Display name (also the default USB product string).
+     * @param name  Display name and fallback product name for a new USB identity.
      * @param fw_version / @p git_hash  Stamped into HELLO + descriptor.
      * All strings must be literals (kept by reference).
      */
@@ -90,7 +45,7 @@ class Host : public HostService
 
     /* ── Optional configuration (call before the link starts) ───────── */
 
-    /** USB product string (default: the module display name). */
+    /** Require this product name. A conflicting name on the shared USB device fails startup. */
     Host& Product(const char* usb_product);
 
     /** Slot auto-loaded at power-on, reported in HELLO (default 0). */
@@ -100,12 +55,10 @@ class Host : public HostService
      *  @p cap must be ≥ the module's live serialized size. */
     Host& Buffers(uint8_t* staging, uint8_t* snapshot, size_t cap);
 
-    /** Custom descriptor buffer (default: SDK-owned 24 KiB in SDRAM). */
+    /** Override the SDK's SDRAM descriptor buffer. */
     Host& DescriptorBuffer(char* buf, size_t cap);
 
-    /** Refresh workspace (default: SDK-owned 24 KiB in SDRAM). Must not
-     *  overlap the descriptor, staging, or snapshot buffers. Configure
-     *  before Start(); large custom descriptors need matching workspace. */
+    /** Refresh workspace must fit the descriptor and be separate from the descriptor and preset buffers. */
     Host& DescriptorRefreshBuffer(char* buf, size_t cap);
 
     /** Custom byte transport (default: CDC on the panel USB-C). */

@@ -46,7 +46,7 @@ class Presets;
 constexpr uint32_t kDefaultSettingsHoldMs = 2000u;
 
 /** Maximum settings pages. */
-constexpr uint8_t  kSettingsMaxPages      = 4u;
+constexpr uint8_t  kSettingsMaxPages      = 8u;
 
 /** Default color used by Render() to paint B1 while settings is active. */
 constexpr LedPanel::Rgb kSettingsDefaultIndicator = {0xFF, 0x50, 0x00};

@@ -1,27 +1,3 @@
-/**
- * @file clock_follower.h
- * @brief External-clock PI-PLL that steers `alchemy::MusicalClock`.
- *
- * `ClockFollower` consumes external clock pulses (Eurorack CV @ 24 PPQN,
- * MIDI 0xF8, tap, etc.) via `OnPulse(stamp_us)` and steers the NCO's
- * rate via `MusicalClock::SetTicksPerUs`.  Pulses *never* perturb NCO
- * phase directly — the timeline stays monotonic.  See spec §4 and §2.
- *
- * Wiring inside ControlLoop::OnPoll:
- *
- *     clk_edge_.Tick(cv, num_cv, now_us);
- *     if (clk_edge_.JustRose(kClockChan))
- *         follower_.OnPulse(clk_edge_.LastRiseUs(kClockChan));
- *     follower_.Update(now_us);
- *     clock_.Tick(now_us);
- *
- * Phase error is measured at pulse-stamp time (anchored to
- * `MusicalClock::LastTickUs`), so the `Update` / `Tick` order is not
- * load-bearing.  `OnPulse` is ISR-safe against the poll path via a
- * single-producer ring: safe from an EXTI or UART ISR, one pulse source
- * at a time.
- */
-
 #pragma once
 
 #include <cstdint>
@@ -30,7 +6,7 @@
 
 namespace alchemy {
 
-/* ── Tuning constants (values from clock bring-up; see musical_clock.h) ── */
+/* ── PLL tuning ──────────────────────────────────────────────────────── */
 
 /** EMA smoothing for the period estimator. */
 constexpr float    kClockEmaAlpha          = 0.15f;
@@ -58,16 +34,6 @@ constexpr uint32_t kClockMaxPeriodFloorUs  = 100000u;
 
 /* ── Loss policy ────────────────────────────────────────────────────────── */
 
-/**
- * What the follower does to the NCO when the external clock is lost.
- *
- * The "right" answer depends on the module type — an effect generally
- * wants to keep timing through a brief dropout (`Freewheel`); a sequencer
- * wants to halt so it doesn't drift out of sync (`Freeze`) or hard-stop
- * (`Stop`).  Hardcoding one policy would repeat the `ClockPll` mistake
- * (baked-in 24 PPQN) that this layer is meant to fix.  Default is
- * `Freewheel`.
- */
 enum class ClockLossPolicy : uint8_t
 {
     Freewheel = 0,   ///< Keep last rate; NCO keeps integrating in time.
@@ -75,8 +41,7 @@ enum class ClockLossPolicy : uint8_t
     Stop      = 2,   ///< Unlock + halt transport via `MusicalClock::Stop`.
 };
 
-/* ── ClockFollower ──────────────────────────────────────────────────────── */
-
+// Steers the clock rate from external pulses measured in MusicalClock's microsecond epoch.
 class ClockFollower
 {
   public:
@@ -86,7 +51,7 @@ class ClockFollower
 
     /** Take over rate steering.  Stops the NCO and zeroes its rate so it
      *  does not free-run at the old internal tempo while waiting for the
-     *  first lock (azoth `extclock_enable`). */
+     *  first lock. */
     void Enable(uint32_t ext_ppqn = kClockExtPpqnDefault);
 
     /** Release rate steering.  The NCO keeps its current rate; the user
@@ -111,20 +76,17 @@ class ClockFollower
 
     /* ── Pulse intake ────────────────────────────────────────────────── */
 
-    /** Deposit a rising-edge timestamp (µs).  Cheap; ISR-safe against the
-     *  poll path.  Pulses are ring-buffered so a poll delayed past a
-     *  pulse period (fast clocks + frame work) drops nothing.  Single
-     *  producer: wire one pulse source at a time. */
+    /** One producer may enqueue pulses from an ISR. A full ring drops the new pulse. */
     void OnPulse(uint32_t stamp_us);
 
     /** Per-poll work: drain buffered pulses, update the period EMA, run
      *  the PI controller, detect loss.  Call once per ~1 ms poll. */
     void Update(uint32_t now_us);
 
-    /** Re-anchor the phase reference after the NCO has been reset to the
-     *  downbeat.  Call alongside `MusicalClock::Reset()` so the follower
-     *  does not fight the discontinuity (spec §4.8). */
+    /** Anchor to the downbeat when resetting the clock. */
     void OnReset();
+    /** Anchor to the clock's current position after a seek or phase correction. */
+    void OnSeek();
 
     /* ── Queries ─────────────────────────────────────────────────────── */
 
@@ -136,14 +98,13 @@ class ClockFollower
 
     /* ── Advanced retuning ───────────────────────────────────────────── */
 
-    /** Override the shipped tuning constants.  Most users should not. */
     void SetGains(float kp, float ki, float ema_alpha);
 
   private:
     bool   ConsumePulse(uint32_t stamp_us);
     double FracTickAt(uint32_t stamp_us) const;
     void   RecomputeLimits();
-    void   HandleLoss(uint32_t now_us);
+    void   HandleLoss();
     void   AnchorPhase(uint32_t stamp_us);
     void   DeclareLock(uint32_t stamp_us);
     void   SeedRateFromPeriod();
@@ -161,9 +122,7 @@ class ClockFollower
     float ki_         = kClockPllKi;
     float ema_alpha_  = kClockEmaAlpha;
 
-    /* ── ISR ↔ poll handoff: SPSC ring, ISR owns head, `Update` owns
-     *    tail (free-running indices).  8 deep buys 66 ms of poll stall
-     *    at kClockBpmMax / 24 PPQN — beyond `kClockMaxTickDtUs`. ────── */
+    // OnPulse owns the head. Update owns the tail.
     static constexpr uint32_t kPulseRingSize = 8u;
     static_assert((kPulseRingSize & (kPulseRingSize - 1u)) == 0u,
                   "free-running ring indices need a power-of-two size");

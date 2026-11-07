@@ -38,6 +38,7 @@
 #include "alchemy/surface/preset_name.h"
 #include "alchemy/surface/presets.h"
 #include "alchemy/surface/settings.h"
+#include "alchemy/midi/mono_settings.h"
 #include "alchemy/surface/virtual_button.h"
 #include "alchemy/surface/virtual_knob.h"
 
@@ -85,6 +86,9 @@ struct LoopTransport : IHostTransport
 {
     std::deque<uint8_t>  rx;
     std::vector<uint8_t> tx;
+    uint32_t generation = 0;
+
+    uint32_t ReadGeneration() const override { return generation; }
 
     size_t Read(uint8_t* dst, size_t max) override
     {
@@ -534,6 +538,28 @@ static Status BlobWrite(Fixture& fx, uint8_t target,
     r = Transact(fx, Cmd::BlobCommit,
                  U32Body(Crc32(payload.data(), payload.size())));
     return Status(r.body.empty() ? 255 : r.body[0]);
+}
+
+static void TestReceiveSession()
+{
+    Fixture fx;
+    TestGetLive(fx);
+    const auto blob = LiveBytes(fx);
+    std::vector<uint8_t> begin(9);
+    begin[0] = kTargetLive;
+    WrU32(begin.data() + 1, uint32_t(blob.size()));
+    WrU32(begin.data() + 5, fx.presets.LiveSchemaHash());
+    CHECK_EQ(Transact(fx, Cmd::BlobBegin, begin).body[0], uint8_t(Status::Ok));
+
+    ++fx.t.generation;
+    CHECK_EQ(Transact(fx, Cmd::BlobData, U32Body(0)).body[0], uint8_t(Status::BadState));
+    std::vector<uint8_t> read(6);
+    WrU32(read.data(), 4);
+    WrU16(read.data() + 4, 4);
+    CHECK_EQ(Transact(fx, Cmd::GetLive, read).body[0], uint8_t(Status::BadState));
+    CHECK_EQ(uint8_t(BlobWrite(fx, kTargetLive, blob, fx.presets.LiveSchemaHash())),
+             uint8_t(Status::Ok));
+    TestGetLive(fx);
 }
 
 static void TestSetLive(Fixture& fx)
@@ -2473,16 +2499,58 @@ static void TestDiagnosticsIntegration()
 
 /* ── Main ──────────────────────────────────────────────────────────── */
 
+static void TestMidiSettingsPages()
+{
+    alchemy::midi::MonoOptions disabled; disabled.channel=0;
+    CHECK_EQ(disabled.Listening().channel_mask,0u);
+    CHECK_EQ(disabled.Part().listen.channel_mask,0u);
+    alchemy::midi::MonoOptions merge;
+    merge.pitch_gate=0; CHECK(!merge.Merge().midi_attacks && merge.Merge().cv_attacks);
+    merge.pitch_gate=1; CHECK(merge.Merge().midi_attacks && !merge.Merge().cv_attacks);
+    AlchemyLab hw;
+    Settings settings(hw);
+    settings.Page(0).Pot(0).Knob().Default(.25f);
+    const auto legacy_hash=settings.SchemaHash();
+    alchemy::midi::MonoSettings midi;
+    CHECK(!midi.Attach(settings,kSettingsMaxPages-1));
+    CHECK_EQ(settings.NumPages(),1u);
+    CHECK(midi.Attach(settings,6));
+    CHECK_EQ(settings.NumPages(),8u);
+    CHECK_EQ(settings.SerializedSize(),25u);
+    CHECK(settings.SchemaHash()!=legacy_hash);
+    CHECK(midi.Read().Valid());
+    std::vector<uint8_t> image(settings.SerializedSize());
+    settings.Serialize(image.data());
+    for (uint8_t channel=0;channel<18;++channel) {
+        midi.channel.Default(channel);
+        CHECK(midi.Read().Valid());
+        const auto mask=midi.Read().Listening().channel_mask;
+        CHECK_EQ(mask,channel==0 ? 0u : channel==1 ? 65535u : 1u<<(channel-2));
+    }
+    CHECK(settings.Deserialize(image.data()));
+    CHECK_EQ(midi.channel.Value(),1u);
+    CHECK(midi.Read().Part().listen.channel_mask==65535u);
+    for (uint8_t slide=0;slide<5;++slide) {
+        midi.slide.Default(slide);
+        CHECK((alchemy::midi::NotePart<1,16>::Validate(midi.Read().Part())));
+    }
+    auto invalid=midi.Read(); invalid.channel=255;
+    CHECK(!invalid.Valid()); CHECK_EQ(invalid.Part().listen.channel_mask,0u);
+    CHECK(invalid.Merge().pitch==alchemy::midi::PitchMerge::Cv);
+}
+
 int main(int argc, char** argv)
 {
     if (argc == 3 && std::string(argv[1]) == "--emit-golden")
         return EmitGolden(argv[2]);
 
+    TestMidiSettingsPages();
     TestDiagnosticsIntegration();
     TestCrc32();
     TestCobs();
     TestFrameRoundtrip();
     TestDescriptorReplacement();
+    TestReceiveSession();
 
     {
         Fixture fx;

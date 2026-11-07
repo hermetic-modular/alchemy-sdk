@@ -13,6 +13,11 @@ set(FRAMEWORK_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/include")
 # project (where CMAKE_SOURCE_DIR is the consumer, not the SDK root).
 set(HW_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../hardware/include")
 
+add_library(alchemy_midi INTERFACE)
+add_library(alchemy::midi ALIAS alchemy_midi)
+target_include_directories(alchemy_midi INTERFACE "${FRAMEWORK_INCLUDE}")
+target_compile_features(alchemy_midi INTERFACE cxx_std_17)
+
 # ── alchemy::primitives ────────────────────────────────────────────────────
 
 add_library(alchemy_primitives STATIC
@@ -59,6 +64,23 @@ if(CMAKE_CROSSCOMPILING)
     target_link_libraries(alchemy_primitives PUBLIC daisy)
 elseif(DEFINED ALCHEMY_STUB_DIR)
     target_include_directories(alchemy_primitives PUBLIC "${ALCHEMY_STUB_DIR}")
+endif()
+
+add_library(alchemy_midi_clock INTERFACE)
+add_library(alchemy::midi_clock ALIAS alchemy_midi_clock)
+target_link_libraries(alchemy_midi_clock INTERFACE alchemy::midi alchemy::primitives)
+
+if(CMAKE_CROSSCOMPILING)
+    target_compile_options(daisy PUBLIC
+        "$<$<COMPILE_LANGUAGE:C,CXX>:-include>"
+        "$<$<COMPILE_LANGUAGE:C,CXX>:${FRAMEWORK_INCLUDE}/alchemy/usb/stack_config.h>")
+    add_library(alchemy_usb_device STATIC src/usb/device_class.cpp src/usb/device.cpp)
+    add_library(alchemy::usb_device ALIAS alchemy_usb_device)
+    target_include_directories(alchemy_usb_device PUBLIC "${FRAMEWORK_INCLUDE}")
+    target_link_libraries(alchemy_usb_device PUBLIC daisy)
+    add_library(alchemy_midi_daisy INTERFACE)
+    add_library(alchemy::midi_daisy ALIAS alchemy_midi_daisy)
+    target_link_libraries(alchemy_midi_daisy INTERFACE alchemy::midi alchemy::usb_device)
 endif()
 
 # ── alchemy::surface (firmware — cross-compile only) ──────────────────────
@@ -128,7 +150,7 @@ target_include_directories(alchemy_host_link PUBLIC
     "${FRAMEWORK_INCLUDE}"
     "${HW_INCLUDE}"
 )
-target_link_libraries(alchemy_host_link PUBLIC alchemy::surface)
+target_link_libraries(alchemy_host_link PUBLIC alchemy::surface alchemy::usb_device)
 
 endif()
 

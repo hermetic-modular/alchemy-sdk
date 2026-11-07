@@ -52,3 +52,7 @@ target_compile_definitions(v2_calibration_test PRIVATE ALCHEMY_CALIBRATION_HOST_
 target_include_directories(v2_calibration_test PRIVATE
     ../hardware/alchemy-lab/v2/include)
 add_test(NAME v2_calibration COMMAND v2_calibration_test)
+
+add_subdirectory(midi)
+
+add_subdirectory(usb)
