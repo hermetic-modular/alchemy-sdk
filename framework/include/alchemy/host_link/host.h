@@ -5,6 +5,7 @@
 #include <initializer_list>
 
 #include "alchemy/host_link/describe.h"
+#include "alchemy/host_link/fast_values.h"
 #include "alchemy/host_link/host_link.h"
 #include "alchemy/surface/host_service.h"
 
@@ -156,6 +157,16 @@ class Host : public HostService
      */
     Host& Extend(IHostlinkExtension& ext);
 
+    /** Opt managed components into the one-response fast mirror before Start(). */
+    Host& Fast(Serializable& source);
+    Host& Fast(Serializable& owner, FastProjection projection);
+    template<class... Rest>
+    Host& Fast(Serializable& first, Serializable& second, Rest&... rest)
+    {
+        Fast(first);
+        return Fast(second, rest...);
+    }
+
     /* ── Lifecycle ───────────────────────────────────────────────────── */
 
     /** Bring the link up (idempotent).  Runs at the first Poll(), once
@@ -237,6 +248,8 @@ class Host : public HostService
     DescribeOverride overrides_[kMaxOverrides] = {};
     uint8_t          num_overrides_            = 0u;
 
+    FastValues fast_;
+    bool fast_ok_ = true;
     ControlLoop* loop_                  = nullptr;
     const Page*  pages_[kMaxPageRefs]   = {};
     uint8_t      num_pages_             = 0u;

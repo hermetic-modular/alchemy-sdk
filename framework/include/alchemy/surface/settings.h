@@ -237,6 +237,9 @@ class Settings : public Serializable
     bool     Deserialize(const uint8_t* in)  override;
     uint32_t SchemaHash () const override;
 
+    /** Apply exactly one persisted scalar through the settings control path. */
+    bool SetSerializedField(uint16_t offset, const uint8_t* data, size_t size, const float* phys);
+
     /** ── Introspection (HostLink descriptor generation) ──── */
 
     /** Control kind at (page, pot); None when out of range. */

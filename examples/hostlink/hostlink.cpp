@@ -209,6 +209,7 @@ int main()
     presets.Manage(trim);
     presets.Manage(buttons);
     presets.Manage(settings);
+    host.Fast(pager, settings, trim);
     presets.UseNames();
 
     loop.Use(pager)

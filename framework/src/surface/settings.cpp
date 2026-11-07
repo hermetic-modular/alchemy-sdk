@@ -736,72 +736,105 @@ void Settings::Serialize(uint8_t* out) const
     }
 }
 
-bool Settings::Deserialize(const uint8_t* in)
+namespace {
+void RestoreSetting(SettingsSlot& s, const uint8_t* in)
 {
-    for (uint8_t pg = 0; pg < num_pages_; pg++)
+    switch (PersistKindOf(s.kind))
     {
-        for (uint8_t p = 0; p < kNumPots; p++)
+        case PersistKind::Float:
         {
-            SettingsSlot& s = slots_[pg][p];
-            switch (PersistKindOf(s.kind))
+            float v;
+            std::memcpy(&v, in, sizeof(float));
+            /* Blob passed CRC + schema gates, but a live host
+             * push can still carry any bytes: NaN-safe clamp to
+             * the pot-normalized range everything downstream
+             * assumes. */
+            if (!(v >= 0.0f)) v = 0.0f;
+            if (v > 1.0f)     v = 1.0f;
+            s.pot.stored = v;
+            /* Canonicalize the resolved value NOW.  Update only
+             * re-derives it while the slot's page is active in
+             * the menu; consumers polling Value() must see the
+             * loaded state immediately. */
+            switch (s.kind)
             {
-                case PersistKind::Float:
-                {
-                    float v;
-                    std::memcpy(&v, in, sizeof(float));
-                    in += sizeof(float);
-                    /* Blob passed CRC + schema gates, but a live host
-                     * push can still carry any bytes: NaN-safe clamp to
-                     * the pot-normalized range everything downstream
-                     * assumes. */
-                    if (!(v >= 0.0f)) v = 0.0f;
-                    if (v > 1.0f)     v = 1.0f;
-                    s.pot.stored = v;
-                    /* Canonicalize the resolved value NOW.  Update only
-                     * re-derives it while the slot's page is active in
-                     * the menu; consumers polling Value() must see the
-                     * loaded state immediately. */
-                    switch (s.kind)
-                    {
-                        case SettingsKind::Bipolar:
-                            s.value = (v - 0.5f) * 2.0f;
-                            break;
-                        case SettingsKind::Brightness:
-                            s.value = s.range_lo + v * (s.range_hi - s.range_lo);
-                            break;
-                        default:   /* Knob */
-                            s.value = v;
-                            break;
-                    }
+                case SettingsKind::Bipolar:
+                    s.value = (v - 0.5f) * 2.0f;
                     break;
-                }
-                case PersistKind::Byte:
-                {
-                    uint8_t idx = in[0];
-                    in += 1u;
-                    if (s.num_zones > 0u && idx >= s.num_zones)
-                        idx = static_cast<uint8_t>(s.num_zones - 1u);
-                    s.value_idx = idx;
-                    /* Canonicalize pot.stored to the zone centre.  The
-                     * active-page tick derives value_idx FROM pot.stored,
-                     * so leaving it stale reverts the loaded selection
-                     * the moment the page is viewed in the menu. */
-                    if (s.num_zones > 0u)
-                        s.pot.stored = (static_cast<float>(idx) + 0.5f)
-                                     / static_cast<float>(s.num_zones);
-                    if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
-                    if (s.lock_exit_src)
-                        s.lock_exit_src->SetExitMode(
-                            ExitModeFromZone(s.value_idx));
+                case SettingsKind::Brightness:
+                    s.value = s.range_lo + v * (s.range_hi - s.range_lo);
                     break;
-                }
-                default:
+                default:   /* Knob */
+                    s.value = v;
                     break;
             }
+            break;
         }
+        case PersistKind::Byte:
+        {
+            uint8_t idx = in[0];
+            if (s.num_zones > 0u && idx >= s.num_zones)
+                idx = static_cast<uint8_t>(s.num_zones - 1u);
+            s.value_idx = idx;
+            /* Canonicalize pot.stored to the zone centre.  The
+             * active-page tick derives value_idx FROM pot.stored,
+             * so leaving it stale reverts the loaded selection
+             * the moment the page is viewed in the menu. */
+            if (s.num_zones > 0u)
+                s.pot.stored = (static_cast<float>(idx) + 0.5f)
+                             / static_cast<float>(s.num_zones);
+            if (s.lock_src) s.lock_src->SetSyncMode(s.value_idx);
+            if (s.lock_exit_src)
+                s.lock_exit_src->SetExitMode(
+                    ExitModeFromZone(s.value_idx));
+            break;
+        }
+        default:
+            break;
     }
+}
+}
+
+bool Settings::Deserialize(const uint8_t* in)
+{
+    for (uint8_t pg = 0; pg < num_pages_; ++pg)
+        for (uint8_t p = 0; p < kNumPots; ++p) {
+            auto& slot = slots_[pg][p];
+            RestoreSetting(slot, in);
+            in += PersistedBytesFor(slot.kind);
+        }
     pending_rearm_ = true;
     return true;
+}
+
+bool Settings::SetSerializedField(uint16_t offset, const uint8_t* data, size_t size,
+                                  const float* phys)
+{
+    if (!phys || !data) return false;
+    size_t at = 0;
+    for (uint8_t pg = 0; pg < num_pages_; ++pg)
+        for (uint8_t p = 0; p < kNumPots; ++p) {
+            auto& slot = slots_[pg][p];
+            const size_t width = PersistedBytesFor(slot.kind);
+            if (width && at == offset) {
+                if (width != size) return false;
+                if (width == sizeof(float)) {
+                    float value;
+                    std::memcpy(&value, data, sizeof value);
+                    if (!(value >= 0.f && value <= 1.f)) return false;
+                } else if (data[0] >= slot.num_zones) return false;
+                RestoreSetting(slot, data);
+                const float target = slot.pot.stored;
+                InitCatch(slot.pot, phys[p]);
+                // Near the catch threshold InitCatch adopts the physical pot.
+                // Keep the serialized target consistent with the resolved handle.
+                slot.pot.stored = target;
+                if (slot.kind == SettingsKind::Brightness) ApplyBrightnessSlot(slot);
+                return true;
+            }
+            at += width;
+        }
+    return false;
 }
 
 uint32_t Settings::SchemaHash() const
