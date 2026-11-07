@@ -16,7 +16,8 @@ add_test(NAME usb_adapter COMMAND usb_adapter_tests)
 add_executable(usb_hostlink_tests hostlink_tests.cpp fixture.cpp
     ../../framework/src/usb/device_class.cpp ../../framework/src/usb/device.cpp
     ../../framework/src/host_link/cdc_transport.cpp ../../framework/src/host_link/host.cpp
-    ../../framework/src/host_link/host_link.cpp ../../framework/src/host_link/descriptor.cpp
+    ../../framework/src/host_link/host_link.cpp ../../framework/src/host_link/fast_values.cpp
+    ../../framework/src/host_link/descriptor.cpp
     ../../framework/src/host_link/describe.cpp ../../framework/src/host_link/json_check.cpp
     ../../framework/src/surface/presets.cpp ../../framework/src/surface/virtual_knob.cpp
     ../../framework/src/surface/pager.cpp ../../framework/src/surface/settings.cpp
@@ -28,6 +29,6 @@ target_include_directories(usb_hostlink_tests PRIVATE . ${USB_CORE}/Inc
 target_link_libraries(usb_hostlink_tests PRIVATE alchemy::primitives)
 target_compile_definitions(usb_hostlink_tests PRIVATE DSY_SDRAM_BSS=)
 target_compile_options(usb_hostlink_tests PRIVATE -UNDEBUG -Werror)
-foreach(STARTUP IN ITEMS host-first midi-first configured explicit-match explicit-conflict)
+foreach(STARTUP IN ITEMS host-first midi-first configured explicit-match explicit-conflict host-first-fast midi-first-fast)
     add_test(NAME usb_hostlink_${STARTUP} COMMAND usb_hostlink_tests ${STARTUP})
 endforeach()
