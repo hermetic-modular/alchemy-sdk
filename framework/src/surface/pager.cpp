@@ -218,6 +218,15 @@ void Pager::PollButtons(uint32_t /*t_ms*/, bool gated)
 
 void Pager::Update(const float* phys, uint32_t t_ms)
 {
+    if (startup_catch_pending_)
+    {
+        startup_catch_pending_ = false;
+        for (uint8_t pg = 0; pg < num_pages_; ++pg)
+            for (uint8_t p = 0; p < num_pots_; ++p)
+                if (startup_seeded_[pg] & (1u << p))
+                    InitCatch(states_[pg][p], phys[p]);
+    }
+
     /* Lazy re-arm after a Deserialize: we now have a phys[] to lock
      * against.  A held layer stays engaged and reads as clean again. */
     if (pending_rearm_)
@@ -524,6 +533,13 @@ void Pager::SetStored(uint8_t page, uint8_t pot, float value, const float* phys)
     PotState& s = states_[page][pot];
     s.stored = value;
     InitCatch(s, phys[pot]);
+    if (startup_catch_pending_)
+    {
+        /* InitCatch can snap a nearby target to phys. Keep the declared
+         * startup default intact until the first live snapshot arrives. */
+        s.stored = value;
+        startup_seeded_[page] |= static_cast<uint8_t>(1u << pot);
+    }
 }
 
 void Pager::LockPage(uint8_t page, const float* phys)

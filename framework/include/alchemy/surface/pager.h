@@ -143,7 +143,9 @@ class Pager : public Serializable, public KnobStorage
     PotState State(uint8_t page, uint8_t pot) const override;
 
     /** Set one (page, pot) stored value and re-arm catch — the user
-     *  must move through the new value before it responds. */
+     *  must move through the new value before it responds. Startup seeds
+     *  re-arm against the first Update's live readings before catch runs,
+     *  so an unprimed startup snapshot cannot create a false crossover. */
     void SetStored(uint8_t page, uint8_t pot, float value, const float* phys);
 
     /** Lock catch on every pot of @p page (e.g. after a preset apply). */
@@ -249,6 +251,11 @@ class Pager : public Serializable, public KnobStorage
      * counts as used only once it moves. */
     float   overlay_engage_[kMaxPots] = {};
     uint8_t overlay_caught_mask_      = 0;
+
+    /* Startup seeds may precede the first physical snapshot. Re-arm only
+     * those cells on the first Update, before processing any pot movement. */
+    bool startup_catch_pending_ = true;
+    uint8_t startup_seeded_[kMaxPages] = {};
 
     /* Set by Deserialize; cleared by the next Update once we have a
      * phys[] to re-arm against. */
