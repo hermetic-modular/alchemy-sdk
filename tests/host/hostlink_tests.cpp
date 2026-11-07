@@ -1239,6 +1239,36 @@ struct FieldedComp : TestComp<N>
     }
 };
 
+static void TestPageColors()
+{
+    Page empty(0);
+    CHECK(empty.TabColor() == nullptr);
+
+    Page page(0);
+    page.Color(LedPanel::Rgb{0x00, 0xab, 0xff});
+    CHECK(std::strcmp(page.TabColor(), "#00abff") == 0);
+    Page copy(page);
+    page.Color(LedPanel::Rgb{0x00, 0x00, 0x00});
+    CHECK(std::strcmp(page.TabColor(), "#000000") == 0);
+    CHECK(std::strcmp(copy.TabColor(), "#00abff") == 0);
+
+    Page assigned(1);
+    {
+        Page source(0);
+        source.Color(LedPanel::Rgb{0x01, 0x23, 0x45});
+        assigned = source;
+        source.Color(LedPanel::Rgb{0xff, 0xff, 0xff});
+        CHECK(std::strcmp(source.TabColor(), "#ffffff") == 0);
+    }
+    CHECK(std::strcmp(assigned.TabColor(), "#012345") == 0);
+    assigned.Color("#AbC");
+    CHECK(std::strcmp(assigned.TabColor(), "#AbC") == 0);
+    assigned.Color(LedPanel::Rgb{0x67, 0x89, 0xab});
+    CHECK(std::strcmp(assigned.TabColor(), "#6789ab") == 0);
+    assigned.Color(nullptr);
+    CHECK(assigned.TabColor() == nullptr);
+}
+
 static void TestAutoDescribe()
 {
     SurfaceFixture sf;
@@ -1259,7 +1289,7 @@ static void TestAutoDescribe()
     VirtualKnob rawd   = VirtualKnob(0, "Raw")
                              .Disp("{\"kind\":\"percent\",\"scale\":110}");
 
-    Page p0 = Page(0).Name("Time").Color("#86efac");
+    Page p0 = Page(0).Name("Time").Color(LedPanel::Rgb{0x86, 0xef, 0xac});
     p0.Knobs(cutoff, drive, engine, plain);
     Page p1 = Page(1).Name("Space");
     p1.Knobs(rawd);
@@ -2674,6 +2704,7 @@ int main(int argc, char** argv)
     TestDescriptorBuilder();
     TestSettingsGesturesEmission();
     TestSettingsUseLocksDescriptor();
+    TestPageColors();
     TestAutoDescribe();
     TestSelectorDisplayHints();
     TestAutoDescribeGenericAndOverrides();
