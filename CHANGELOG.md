@@ -1,3 +1,50 @@
+# Alchemy SDK v0.13.0 | 2026-11-11
+
+MIDI and HostLink can now share the USB connection, with note handling, controller mapping, clock, and scheduled output in the SDK. An optional fast HostLink path updates selected controls without transferring the whole live state. Also: 64 diagnostic values, RGB page colors, and fixes for startup defaults and eight-page settings descriptors.
+
+## MIDI alongside HostLink (#66)
+
+This is a new MIDI implementation for some upcoming internal Hermetic Modular firmwares. This has now been built out in a way that should set the entire SDK and all developers up well for future MIDI implementations. I’m interested to hear what you think and whether you have any feedback. This has been pretty carefully considered, both to work with HostLink and to provide things like driving the same master clock in the SDK and careful handling of polyphony.
+
+- Added USB MIDI on the same composite device as HostLink. Both services can initialize in either order. The transport layer also supports UART input.
+- Added mono, polyphonic, and paraphonic note handling, voice allocation, MPE expression, sustain, legato, and configurable pitch slides. Off note mode releases the part’s voices and ignores subsequent notes.
+- Added CC, RPN, and NRPN decoding, parameter routes, MIDI learn, takeover policies, and MIDI/CV merging.
+- Added MIDI clock and transport integration with `MusicalClock`.
+- Added nonblocking output with scheduling, realtime priority, message bundles, and streaming SysEx. Bounded queues provide foreground-to-audio handoff and source cleanup on disconnect or overflow.
+- Added preset serialization for note-part configuration and controller routes, plus optional MIDI settings pages. Settings capacity increases to eight pages; HostLink descriptors now support the same limit.
+
+## Optional fast HostLink values (#67)
+
+You may be familiar with the roughly 1.6-second heartbeat for updating mirrored, plugged-in devices. This is not a hard limit. It is, however, a performance one. There’s a new option that allows devices to update faster if a developer chooses.
+
+- Added `host.Fast(pager, settings)` to opt managed components into compact reads and targeted edits. Register them before the Host starts, normally at its first `Poll()`.
+- Added `FastProjection` for selected ranges within larger components, with an optional custom edit callback.
+- Pager and Settings edits update the requested field without restoring unrelated live state. Editing a control no longer needs to resend a potentially stale recording buffer.
+- Fast reads and full-state transfers use independent buffers. Complete snapshots and preset formats are unchanged by enabling the fast path.
+
+## Startup defaults (#65)
+
+- Pickup now initializes from the first live knob readings. Values seeded with `Pager::SetStored()` during setup survive until the physical control catches them.
+- Setup preserves the exact seeded value rather than snapping it to an unprimed input. Runtime writes retain their existing pickup behavior.
+
+## Diagnostics capacity (#68; issue #64)
+
+- Increased the maximum registered diagnostic values from 16 to 64.
+- All 64 values fit in one live-value response, including the 512-byte frame configuration. Gauge descriptions remain paginated.
+
+## RGB page colors (#69; issue #59)
+
+- Added `Page::Color(LedPanel::Rgb)`, so pages can reuse the LED palette already used by the firmware.
+- Generated CSS colors are stored by the page and remain valid through fluent construction, copying, and assignment.
+
+## Companion Web Programmer changes
+
+- The programmer requests enabled fast values at a 100 ms interval when the link is available and uses targeted writes for eligible controls. Modules that omit the fast path retain full-state editing.
+- Modal button banks render without a dummy Selector.
+- Descriptor diagnostics show the parser or firmware error and the received JSON. If the descriptor is unusable, raw preset export and exact-schema restore remain available; migration requires a valid descriptor.
+- Numeric entries committed with Enter or cancelled with Escape no longer write zero when the field subsequently loses focus. Empty entries do not change the value.
+- The firmware picker retains the selected tab when reopened within the same page session.
+
 # Alchemy SDK v0.12.0 | 2026-09-29
 
 USB diagnostics now share the HostLink connection, including on firmware without presets. Selectors fixed to match across values, rings, and the browser; firmware can refresh its published metadata while connected. Also: corrected codec CV scaling, reliable codec-input trigger detection, a rollover-safe control-loop timebase, and stricter calibration validation.
