@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include "alchemy/host_link/json_writer.h"
 #include "alchemy/surface/see_ref.h"
+#include "alchemy/surface/settings.h"
 
 namespace alchemy {
 
@@ -227,7 +228,7 @@ class DescriptorBuilder
     const char* LastError() const { return err_; }
 
   private:
-    static constexpr uint8_t  kMaxSettingsPages = 4u;
+    static constexpr uint8_t  kMaxSettingsPages = kSettingsMaxPages;
     static constexpr uint8_t  kMaxPots          = 8u;
     static constexpr uint16_t kMaxFieldIds      = 192u;
     static constexpr uint8_t  kMaxRefs          = 96u;

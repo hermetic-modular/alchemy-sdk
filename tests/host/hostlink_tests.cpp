@@ -2654,6 +2654,23 @@ static void TestMidiSettingsPages()
     CHECK(midi.Attach(settings,6));
     CHECK_EQ(settings.NumPages(),8u);
     CHECK_EQ(settings.SerializedSize(),25u);
+    Presets descriptor_presets(hw.seed.qspi);
+    descriptor_presets.Manage(settings);
+    char eight_page_json[8192];
+    DescriptorBuilder descriptor(eight_page_json, sizeof(eight_page_json), descriptor_presets);
+    CHECK(descriptor.Begin({"eight_pages", "Eight pages", "test", "test", "test", "v2"}));
+    CHECK(descriptor.BeginSettings("settings", settings));
+    char ids[kSettingsMaxPages][kNumPots][16] = {};
+    for (uint8_t page = 0; page < settings.NumPages(); ++page) {
+        for (uint8_t pot = 0; pot < kNumPots; ++pot) {
+            if (!Settings::PersistedBytesFor(settings.KindAt(page, pot))) continue;
+            std::snprintf(ids[page][pot], sizeof(ids[page][pot]), "s.%u.%u", page, pot);
+            CHECK(descriptor.SettingsField(page, pot, ids[page][pot], ids[page][pot], nullptr));
+        }
+    }
+    CHECK(descriptor.EndSettings());
+    CHECK(descriptor.Finish() > 0);
+    CHECK(std::strstr(eight_page_json, "\"page\":7") != nullptr);
     CHECK(settings.SchemaHash()!=legacy_hash);
     CHECK(midi.Read().Valid());
     std::vector<uint8_t> image(settings.SerializedSize());
